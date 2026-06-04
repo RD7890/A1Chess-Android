@@ -172,3 +172,20 @@ After every bug fix or meaningful change, update:
 - The **File map** if new files were added
 
 This keeps the loop from repeating.
+
+---
+
+## 14. Always push ALL changed files in ONE commit (Git Trees API)
+
+**Never push files one-by-one via the Contents API** — each PUT triggers a separate CI build, wasting minutes and money.
+
+Instead, use the **Git Trees API** to bundle every change into a single commit:
+
+1. `GET /repos/{owner}/{repo}/git/ref/heads/{branch}` → current commit SHA
+2. `GET /repos/{owner}/{repo}/git/commits/{commitSha}` → current tree SHA
+3. `POST /repos/{owner}/{repo}/git/blobs` for each changed file → blob SHAs
+4. `POST /repos/{owner}/{repo}/git/trees` with all blobs + parent tree SHA → new tree SHA
+5. `POST /repos/{owner}/{repo}/git/commits` with new tree SHA → new commit SHA
+6. `PATCH /repos/{owner}/{repo}/git/refs/heads/{branch}` → update branch to new commit
+
+One push = one commit = one CI build. No exceptions.

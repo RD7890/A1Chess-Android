@@ -126,11 +126,19 @@ The workflow triggers on push to `main`/`dev`/`release/**`.
 - `stockfish` binary is NOT committed to the repo — it is built in CI and cached. If you change the NDK version or anything about the build, bump the cache key suffix (`v3` → `v4`).
 - `chesslib 1.3.4` is from JitPack (`https://jitpack.io`). The `settings.gradle.kts` must include JitPack in `dependencyResolutionManagement.repositories` or it won't resolve.
 - `android.suppressUnsupportedCompileSdk=35` is in `gradle.properties` to silence the AGP 8.5.2 / compileSdk 35 warning (non-fatal).
-- `Divider()` in Material3 is deprecated (use `HorizontalDivider`) — currently used in GameScreen, SettingsScreen, ThemeSettingsScreen. It compiles fine with a warning.
+- `Divider()` in Material3 is deprecated — replaced with `HorizontalDivider()` in GameScreen. SettingsScreen and ThemeSettingsScreen still use deprecated form (compile-time warning only).
 - The app theme parent MUST be an AppCompat/Material theme (not `android:Theme.Material.*`) because `activity-compose` and edge-to-edge API depend on AppCompat.
 - Signing keystore is generated fresh every CI run (not stored as a secret). APKs signed this way are NOT suitable for Play Store upload — each build has a different key. For Play Store, store the keystore as a base64 secret.
+- Board colors: `BoardLightGreen = 0xFFEEEED2` (cream), `BoardDarkGreen = 0xFF769656` (muted olive) — Lichess classic. Do NOT revert to bright 0xFF6B9C39 / 0xFFCEDD9A — too saturated.
+- No emojis anywhere in the UI — use Material Icons or custom SVGs only.
+- `AnalysisLine` data class lives in `StockfishEngine.kt`. MultiPV parsing reads `multipv N score cp X pv <moves>` lines and buffers them until `bestmove` is received, then emits the sorted list via `analysisFlow`.
+- `ChessGame` has a `redoStack` — navigateBack() pushes to it, navigateForward() pops from it, tryMove() clears it. `GameState.canGoBack` / `canGoForward` are computed automatically in `updateState()`.
+- OTB mode (`isOtbMode = true` in GameViewModel): the engine ONLY analyses — it never makes moves. `bestMoveFlow` is ignored when OTB. Analysis runs after every player move via `runAnalysis()`.
+- Timer lives in GameViewModel, NOT in GameState. `whiteTimeSecs` / `blackTimeSecs` are separate StateFlows ticking on a coroutine. Default = 300 s (5 min).
+- GitHub push method: Contents API via bash + node. PAT stored as GITHUB_PAT Replit secret. Pattern: GET sha → PUT base64 content.
 
 ## Next things to do (not yet built)
-- Add game history / replay screen
-- Play as Black option on GameScreen (currently hardcoded to White)
-- Store persistent signing keystore as GitHub secret for Play Store builds
+- Persist signing keystore as base64 GitHub secret for Play Store builds
+- Play as Black / colour-chooser dialog on new-game
+- Time-control picker (5 min, 10 min, custom) in new-game dialog
+- vs-Computer mode accessible from Home screen (currently both home buttons launch OTB)

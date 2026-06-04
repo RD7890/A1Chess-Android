@@ -25,8 +25,10 @@ data class Arrow(
 
 enum class ArrowColor { GREEN, BLUE, RED, YELLOW }
 
+const val START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+
 data class GameState(
-    val fen: String = Board.DEFAULT_POSITION,
+    val fen: String = START_FEN,
     val moves: List<ChessMove> = emptyList(),
     val selectedSquare: String? = null,
     val legalMoves: List<String> = emptyList(),
@@ -47,11 +49,11 @@ class ChessGame {
     val state: StateFlow<GameState> = _state
 
     init {
-        board.loadFromFen(Board.DEFAULT_POSITION)
+        board.loadFromFen(START_FEN)
         updateState()
     }
 
-    fun reset(fen: String = Board.DEFAULT_POSITION) {
+    fun reset(fen: String = START_FEN) {
         board.loadFromFen(fen)
         moveHistory.clear()
         updateState()
@@ -77,7 +79,7 @@ class ChessGame {
             return false
         }
 
-        val isCurrentTurnPiece = (piece.pieceSide == Side.WHITE) == board.sideToMove == Side.WHITE
+        val isCurrentTurnPiece = piece.pieceSide == board.sideToMove
         if (!isCurrentTurnPiece) {
             _state.value = current.copy(selectedSquare = null, legalMoves = emptyList())
             return false

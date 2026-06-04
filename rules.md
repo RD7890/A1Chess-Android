@@ -81,7 +81,34 @@ AppCompat is available transitively via `activity-compose`.
 
 ---
 
-## 7. Edit files — never rewrite from scratch
+## 7. `Board.DEFAULT_POSITION` does NOT exist in chesslib 1.3.4
+
+Use the constant defined in `ChessGame.kt`:
+```kotlin
+const val START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+```
+Never reference `Board.DEFAULT_POSITION` — it will cause an unresolved reference compile error.
+
+---
+
+## 8. Signing keystore path — always use `rootProject.file()`
+
+In `app/build.gradle.kts`, `file()` resolves relative to the **app module directory** (`app/`), not the repo root.
+CI generates the keystore at repo root `signing/signing-key.jks`.
+
+**Always use:**
+```kotlin
+storeFile = rootProject.file(localProperties.getProperty("signing.storeFile", "signing/signing-key.jks"))
+```
+
+**Never:**
+```kotlin
+storeFile = file(...)  // resolves to app/signing/... → FileNotFound
+```
+
+---
+
+## 9. Edit files — never rewrite from scratch
 
 Use targeted edits. Read the file first, then change only what needs changing.  
 Rewriting loses context and introduces new bugs.

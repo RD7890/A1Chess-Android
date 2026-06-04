@@ -116,6 +116,7 @@ The workflow triggers on push to `main`/`dev`/`release/**`.
 | #1 | Commit SHA was printed literally as `$(echo ... \| cut)` | Store in `SHORT_SHA` var first |
 | #2 | `android.useAndroidX` not set → `checkReleaseAarMetadata` failed | Added `gradle.properties` |
 | #3 | `android:style/Theme.Material.NoTitleBar not found` on API 35 | Changed parent to `Theme.AppCompat.DayNight.NoActionBar` in `themes.xml` |
+| #4 | `Theme.AppCompat.DayNight.NoActionBar not found` — appcompat not in deps | Changed parent to `android:Theme.Material.Light` + `windowNoTitle=true` + `windowActionBar=false` (platform theme, no extra dep needed) |
 
 ## Known gotchas
 - `stockfish` binary is NOT committed to the repo — it is built in CI and cached. If you change the NDK version or anything about the build, bump the cache key suffix (`v3` → `v4`).

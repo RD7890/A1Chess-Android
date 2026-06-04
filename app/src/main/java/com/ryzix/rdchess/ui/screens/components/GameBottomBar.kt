@@ -9,59 +9,78 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
+/**
+ * In-game control bar:
+ *   Menu | Bolt | Pause/Play | ChevronLeft | ChevronRight | Undo
+ */
 @Composable
 fun GameBottomBar(
+    onMenu: () -> Unit,
+    onEngineStrength: () -> Unit,
+    onPauseToggle: () -> Unit,
+    onBack: () -> Unit,
+    onForward: () -> Unit,
     onUndo: () -> Unit,
-    onFlip: () -> Unit,
-    onNewGame: () -> Unit,
-    onSettings: () -> Unit,
-    canUndo: Boolean,
+    isPaused: Boolean,
+    canBack: Boolean,
+    canForward: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 3.dp,
+        tonalElevation = 2.dp,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 4.dp),
+                .padding(horizontal = 4.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onUndo, enabled = canUndo) {
-                Icon(
-                    imageVector = Icons.Rounded.Undo,
-                    contentDescription = "Undo",
-                    tint = if (canUndo) MaterialTheme.colorScheme.onSurface
-                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                )
-            }
+            BarButton(icon = Icons.Rounded.Menu, desc = "Move list", onClick = onMenu)
 
-            IconButton(onClick = onFlip) {
-                Icon(
-                    imageVector = Icons.Rounded.SwapVert,
-                    contentDescription = "Flip board",
-                    tint = MaterialTheme.colorScheme.onSurface,
-                )
-            }
+            BarButton(icon = Icons.Rounded.Bolt, desc = "Engine strength", onClick = onEngineStrength)
 
-            IconButton(onClick = onNewGame) {
-                Icon(
-                    imageVector = Icons.Rounded.Refresh,
-                    contentDescription = "New game",
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
+            BarButton(
+                icon = if (isPaused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
+                desc = if (isPaused) "Resume timer" else "Pause timer",
+                onClick = onPauseToggle,
+            )
 
-            IconButton(onClick = onSettings) {
-                Icon(
-                    imageVector = Icons.Rounded.Settings,
-                    contentDescription = "Settings",
-                    tint = MaterialTheme.colorScheme.onSurface,
-                )
-            }
+            BarButton(
+                icon = Icons.Rounded.ChevronLeft,
+                desc = "Previous move",
+                onClick = onBack,
+                enabled = canBack,
+            )
+
+            BarButton(
+                icon = Icons.Rounded.ChevronRight,
+                desc = "Next move",
+                onClick = onForward,
+                enabled = canForward,
+            )
+
+            BarButton(icon = Icons.Rounded.Undo, desc = "Undo move", onClick = onUndo)
         }
+    }
+}
+
+@Composable
+private fun BarButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    desc: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
+    IconButton(onClick = onClick, enabled = enabled) {
+        Icon(
+            imageVector = icon,
+            contentDescription = desc,
+            tint = if (enabled) MaterialTheme.colorScheme.onSurface
+                   else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.28f),
+            modifier = Modifier.size(26.dp),
+        )
     }
 }

@@ -1,0 +1,20 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+
+# Signing (generated in CI automatically)
+signing/signing-key.jks
+*.jks
+*.keystore
+
+# Stockfish binary (compiled in CI automatically)
+app/src/main/assets/stockfish
+
+# Build outputs
+app/build/

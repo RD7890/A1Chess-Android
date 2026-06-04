@@ -1,0 +1,3 @@
+-keep class com.github.bhlangonijr.chesslib.** { *; }
+-keep class com.caverock.androidsvg.** { *; }
+-dontwarn com.github.bhlangonijr.**

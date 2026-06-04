@@ -1,0 +1,237 @@
+name: Build A1 Chess APK
+
+on:
+  push:
+    branches:
+      - "main"
+      - "dev"
+      - "release/**"
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    branches: [ "main" ]
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch: { }
+
+permissions:
+  contents: write
+
+env:
+  TG_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  TG_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+
+jobs:
+  build_release_apk:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 0. Cancel duplicate runs ─────────────────────────────────────────
+      - name: Cancel previous runs
+        uses: styfle/cancel-workflow-action@0.12.1
+        with:
+          access_token: ${{ github.token }}
+
+      # ── 1. Notify: Build started ─────────────────────────────────────────
+      - name: Telegram — Build started
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            -d text="$(printf '🔨 *A1 Chess — Build Started*\n\n📌 Branch: `%s`\n🔢 Build: #%s\n📝 Commit: `%s`\n\n⏳ Compiling Stockfish 10 + assembling APK...' \
+              '${{ github.ref_name }}' '${{ github.run_number }}' '$(echo ${{ github.sha }} | cut -c1-7)')"
+
+      # ── 2. Checkout ──────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── 3. Java ──────────────────────────────────────────────────────────
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # ── 4. Android NDK ───────────────────────────────────────────────────
+      - name: Setup Android NDK r25c
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r25c
+          add-to-path: true
+
+      # ── 5. Gradle cache ──────────────────────────────────────────────────
+      - name: Restore Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/libs.versions.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      # ── 6. Stockfish binary cache ────────────────────────────────────────
+      - name: Restore Stockfish 10 ARM64 cache
+        id: sf-cache
+        uses: actions/cache@v4
+        with:
+          path: app/src/main/assets/stockfish
+          key: stockfish-10-arm64-ndk-r25c-v2
+
+      # ── 7. Build Stockfish 10 from source ────────────────────────────────
+      - name: Build Stockfish 10 for Android ARM64
+        if: steps.sf-cache.outputs.cache-hit != 'true'
+        env:
+          NDK_PATH: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          set -e
+          sudo apt-get install -y --no-install-recommends build-essential
+
+          curl -fsSL https://github.com/official-stockfish/Stockfish/archive/refs/tags/sf_10.tar.gz | tar -xz
+          cd Stockfish-sf_10/src
+
+          TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
+          CXX_BIN="$TOOLCHAIN/bin/aarch64-linux-android21-clang++"
+
+          make -j$(nproc) \
+            ARCH=armv8 \
+            COMP=clang \
+            CXX="$CXX_BIN" \
+            CXXFLAGS="-O3 -DNDEBUG -std=c++14" \
+            LDFLAGS="-static-libstdc++ -lm" \
+            build
+
+          "$TOOLCHAIN/bin/llvm-strip" stockfish || true
+          cp stockfish "$GITHUB_WORKSPACE/app/src/main/assets/stockfish"
+          echo "Stockfish binary: $(wc -c < $GITHUB_WORKSPACE/app/src/main/assets/stockfish) bytes"
+
+      # ── 8. Verify Stockfish ───────────────────────────────────────────────
+      - name: Verify Stockfish binary
+        run: |
+          [ -f app/src/main/assets/stockfish ] || { echo "FATAL: Missing Stockfish binary"; exit 1; }
+          echo "OK: $(wc -c < app/src/main/assets/stockfish) bytes"
+
+      # ── 9. Generate signing keystore ──────────────────────────────────────
+      - name: Generate signing keystore
+        run: |
+          mkdir -p signing
+          keytool -genkeypair \
+            -alias A1Chess -keypass 123456 \
+            -keystore signing/signing-key.jks \
+            -storepass 123456 \
+            -dname "CN=A1Chess,OU=Dev,O=RDChess,L=India,S=India,C=IN" \
+            -keyalg RSA -keysize 2048 -validity 10000 -noprompt
+
+      # ── 10. Signing config ────────────────────────────────────────────────
+      - name: Create local.properties
+        run: |
+          printf 'signing.storeFile=signing/signing-key.jks\nsigning.storePassword=123456\nsigning.keyAlias=A1Chess\nsigning.keyPassword=123456\n' > local.properties
+
+      # ── 11. Make gradlew executable ───────────────────────────────────────
+      - name: chmod gradlew
+        run: chmod +x ./gradlew
+
+      # ── 12. Assemble Release APK (log captured) ───────────────────────────
+      - name: Assemble Release APK
+        run: |
+          set -o pipefail
+          ./gradlew :app:assembleRelease --stacktrace 2>&1 | tee build.log
+          echo "BUILD_STATUS=success" >> $GITHUB_ENV
+
+      # ── 13. Get version ───────────────────────────────────────────────────
+      - name: Get version info
+        id: version
+        run: |
+          VER=$(grep 'versionName' app/build.gradle.kts | grep -oP '"[^"]+"' | tr -d '"' | head -1)
+          BUILD=${{ github.run_number }}
+          echo "name=$VER" >> $GITHUB_OUTPUT
+          echo "apk_name=A1Chess-v${VER}-b${BUILD}.apk" >> $GITHUB_OUTPUT
+
+      # ── 14. Rename APK ────────────────────────────────────────────────────
+      - name: Rename APK
+        run: |
+          APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          cp "$APK" "app/build/outputs/apk/release/${{ steps.version.outputs.apk_name }}"
+
+      # ── 15. Upload artifact ───────────────────────────────────────────────
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: ${{ steps.version.outputs.apk_name }}
+          path: app/build/outputs/apk/release/A1Chess-*.apk
+          retention-days: 30
+
+      # ── 16. Create GitHub Release ─────────────────────────────────────────
+      - name: Create GitHub Release
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))
+        id: release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.name }}-build.${{ github.run_number }}
+          name: "A1 Chess v${{ steps.version.outputs.name }} (Build #${{ github.run_number }})"
+          body: |
+            **A1 Chess — Automated Release**
+            Branch: `${{ github.ref_name }}` | Commit: `${{ github.sha }}` | Engine: Stockfish 10 (ARM64)
+          draft: false
+          prerelease: true
+          files: app/build/outputs/apk/release/A1Chess-*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 17. Telegram — SUCCESS ────────────────────────────────────────────
+      - name: Telegram — Success notification
+        if: success()
+        run: |
+          RELEASE_URL="https://github.com/RD7890/A1Chess-Android/releases"
+          ARTIFACT_URL="https://github.com/RD7890/A1Chess-Android/actions/runs/${{ github.run_id }}"
+
+          # 1. Send success message
+          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            -d text="$(printf '✅ *A1 Chess Build #%s — SUCCESS*\n\n📦 APK: `%s`\n🌿 Branch: `%s`\n🔖 Commit: `%s`\n\n🔗 *Download APK:*\n[GitHub Release](%s)\n[Build Artifacts](%s)\n\n🕐 Build took: check Actions page' \
+              '${{ github.run_number }}' \
+              '${{ steps.version.outputs.apk_name }}' \
+              '${{ github.ref_name }}' \
+              '$(echo ${{ github.sha }} | cut -c1-7)' \
+              "$RELEASE_URL" \
+              "$ARTIFACT_URL")"
+
+          # 2. Send build log as file (tail last 200 lines to keep it readable)
+          tail -200 build.log > build_summary.log
+          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+            -F chat_id="${TG_CHAT_ID}" \
+            -F document=@build_summary.log \
+            -F caption="📋 Build #${{ github.run_number }} — raw log (last 200 lines)"
+
+      # ── 18. Telegram — FAILURE ────────────────────────────────────────────
+      - name: Telegram — Failure notification
+        if: failure()
+        run: |
+          ACTIONS_URL="https://github.com/RD7890/A1Chess-Android/actions/runs/${{ github.run_id }}"
+
+          # 1. Send failure alert
+          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            -d text="$(printf '❌ *A1 Chess Build #%s — FAILED*\n\n🌿 Branch: `%s`\n🔖 Commit: `%s`\n\n🔍 [View full logs](%s)\n\nLog excerpt attached below 👇' \
+              '${{ github.run_number }}' \
+              '${{ github.ref_name }}' \
+              '$(echo ${{ github.sha }} | cut -c1-7)' \
+              "$ACTIONS_URL")"
+
+          # 2. Send last 200 lines of whatever log we have
+          if [ -f build.log ]; then
+            tail -200 build.log > fail_log.txt
+          else
+            echo "Build failed before Gradle step (no build.log generated)" > fail_log.txt
+          fi
+          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+            -F chat_id="${TG_CHAT_ID}" \
+            -F document=@fail_log.txt \
+            -F caption="💥 Failure log — Build #${{ github.run_number }}"

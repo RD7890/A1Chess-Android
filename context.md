@@ -117,6 +117,10 @@ The workflow triggers on push to `main`/`dev`/`release/**`.
 | #2 | `android.useAndroidX` not set → `checkReleaseAarMetadata` failed | Added `gradle.properties` |
 | #3 | `android:style/Theme.Material.NoTitleBar not found` on API 35 | Changed parent to `Theme.AppCompat.DayNight.NoActionBar` in `themes.xml` |
 | #4 | `Theme.AppCompat.DayNight.NoActionBar not found` — appcompat not in deps | Changed parent to `android:Theme.Material.Light` + `windowNoTitle=true` + `windowActionBar=false` (platform theme, no extra dep needed) |
+| #5 | `Board.DEFAULT_POSITION` unresolved — doesn't exist in chesslib 1.3.4 | Defined `const val START_FEN = "rnbqkbnr/..."` in ChessGame.kt and replaced all usages |
+| #5 | `Operator '==' cannot be applied to Boolean and Side` (ChessGame.kt:80) | Fixed chain comparison: `(piece.pieceSide == Side.WHITE) == board.sideToMove` → `piece.pieceSide == board.sideToMove` |
+| #5 | `Keystore file 'app/signing/signing-key.jks' not found` | `file()` in app module resolves relative to `app/` — changed to `rootProject.file()` in build.gradle.kts |
+| #8 | ✅ **BUILD SUCCESS** | All fixes applied. APK produced with `--no-daemon` flag |
 
 ## Known gotchas
 - `stockfish` binary is NOT committed to the repo — it is built in CI and cached. If you change the NDK version or anything about the build, bump the cache key suffix (`v3` → `v4`).

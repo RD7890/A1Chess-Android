@@ -145,7 +145,7 @@ jobs:
       - name: Assemble Release APK
         run: |
           set -o pipefail
-          ./gradlew :app:assembleRelease --stacktrace 2>&1 | tee build.log
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
           echo "BUILD_STATUS=success" >> $GITHUB_ENV
 
       # ── 13. Get version ───────────────────────────────────────────────────

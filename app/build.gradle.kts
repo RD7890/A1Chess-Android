@@ -19,8 +19,12 @@ android {
         applicationId = "com.ryzix.rdchess"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
+        versionCode = 3
         versionName = "1.1"
+
+        ndk {
+            abiFilters += setOf("arm64-v8a")
+        }
     }
 
     signingConfigs {
@@ -56,6 +60,12 @@ android {
         compose = true
     }
     packaging {
+        jniLibs {
+            // Force extraction of .so files to nativeLibraryDir on disk.
+            // Without this, API 23+ keeps them compressed inside the APK
+            // and memory-maps them — cannot be launched via ProcessBuilder.
+            useLegacyPackaging = true
+        }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }

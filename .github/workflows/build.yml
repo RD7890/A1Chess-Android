@@ -80,8 +80,8 @@ jobs:
         id: sf-cache
         uses: actions/cache@v4
         with:
-          path: app/src/main/assets/stockfish
-          key: stockfish-16-arm64-ndk-r25c-v1
+          path: app/src/main/jniLibs/arm64-v8a/libstockfish.so
+          key: stockfish-16-arm64-ndk-r25c-jniLibs-v2
 
       # ── 7. Build Stockfish 16 from source ────────────────────────────────
       - name: Build Stockfish 16 for Android ARM64
@@ -112,15 +112,19 @@ jobs:
             build
 
           "$TOOLCHAIN/bin/llvm-strip" stockfish || true
-          cp stockfish "$GITHUB_WORKSPACE/app/src/main/assets/stockfish"
-          echo "Stockfish binary: $(wc -c < $GITHUB_WORKSPACE/app/src/main/assets/stockfish) bytes"
+
+          # Place in jniLibs — Android auto-extracts .so files at install time,
+          # bypassing the AssetManager 2 MB compressed-asset limit entirely.
+          mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a"
+          cp stockfish "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libstockfish.so"
+          echo "Stockfish (jniLib): $(wc -c < $GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libstockfish.so) bytes"
 
       # ── 8. Verify Stockfish ───────────────────────────────────────────────
       - name: Verify Stockfish binary
         run: |
-          [ -f app/src/main/assets/stockfish ] || { echo "FATAL: Missing Stockfish binary"; exit 1; }
-          echo "OK: $(wc -c < app/src/main/assets/stockfish) bytes"
-          file app/src/main/assets/stockfish || true
+          [ -f app/src/main/jniLibs/arm64-v8a/libstockfish.so ] || { echo "FATAL: Missing libstockfish.so"; exit 1; }
+          echo "OK: $(wc -c < app/src/main/jniLibs/arm64-v8a/libstockfish.so) bytes"
+          file app/src/main/jniLibs/arm64-v8a/libstockfish.so || true
 
       # ── 9. Generate signing keystore ──────────────────────────────────────
       - name: Generate signing keystore

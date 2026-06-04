@@ -42,7 +42,7 @@ val STOCKFISH_LEVELS = listOf(
 class StockfishEngine(private val context: Context) {
     companion object {
         private const val TAG = "StockfishEngine"
-        private const val STOCKFISH_ASSET = "stockfish"
+        private const val LIB_NAME = "libstockfish.so"
     }
 
     private var process: Process? = null
@@ -59,10 +59,7 @@ class StockfishEngine(private val context: Context) {
     private val _analysisFlow = MutableSharedFlow<List<AnalysisLine>>(extraBufferCapacity = 10)
     val analysisFlow: SharedFlow<List<AnalysisLine>> = _analysisFlow
 
-    // Buffer collected during one search run
     private val lineBuffer = mutableMapOf<Int, AnalysisLine>()
-
-    // Track last emitted depth to avoid redundant partial emits
     private var lastEmittedDepth = -1
 
     var isReady = false
@@ -76,20 +73,44 @@ class StockfishEngine(private val context: Context) {
     @Volatile private var pendingSearchSettings: EngineSettings? = null
     @Volatile private var isSearchPending = false
 
+    /**
+     * Locate the Stockfish binary.
+     *
+     * Android's package installer extracts every .so from jniLibs/arm64-v8a/
+     * into nativeLibraryDir at install time — already executable, no manual copy needed.
+     * This avoids the AssetManager 2 MB decompression limit that breaks large assets.
+     */
+    private fun findBinary(): File? {
+        val nativeDir = context.applicationInfo.nativeLibraryDir
+        val binary = File(nativeDir, LIB_NAME)
+        Log.d(TAG, "Looking for Stockfish at: ${binary.absolutePath}")
+        return if (binary.exists() && binary.length() > 0L) {
+            Log.d(TAG, "Found Stockfish: ${binary.length()} bytes")
+            binary
+        } else {
+            Log.e(TAG, "Stockfish binary NOT found at $nativeDir — APK may be missing jniLibs/arm64-v8a/$LIB_NAME")
+            null
+        }
+    }
+
     fun init(): Boolean {
         return try {
-            val binary = extractBinary() ?: return false
+            val binary = findBinary() ?: return false
+            if (!binary.canExecute()) {
+                binary.setExecutable(true)
+            }
             val pb = ProcessBuilder(binary.absolutePath)
             pb.redirectErrorStream(true)
             process = pb.start()
             writer = BufferedWriter(OutputStreamWriter(process!!.outputStream))
             reader = BufferedReader(InputStreamReader(process!!.inputStream))
+            Log.d(TAG, "Stockfish process started: ${binary.absolutePath}")
             sendCommand("uci")
             startReadLoop()
             sendCommand("isready")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to init Stockfish: ${e.message}")
+            Log.e(TAG, "Failed to init Stockfish: ${e.message}", e)
             false
         }
     }
@@ -134,7 +155,6 @@ class StockfishEngine(private val context: Context) {
                         line.startsWith("bestmove") -> {
                             val parts = line.split(" ")
                             val move = if (parts.size >= 2) parts[1] else null
-                            // Flush final accumulated MultiPV lines
                             if (lineBuffer.isNotEmpty()) {
                                 val sorted = lineBuffer.values.sortedBy { it.rank }
                                 _analysisFlow.emit(sorted)
@@ -153,8 +173,6 @@ class StockfishEngine(private val context: Context) {
                                 if (al.rank == 1) {
                                     _evalFlow.emit(al.eval)
                                 }
-                                // Emit partial results as soon as we have ALL N lines at same depth
-                                // This gives live updates without waiting for bestmove
                                 val expectedPvCount = pendingSettings?.multiPv ?: 3
                                 val allSameDepth = lineBuffer.values.isNotEmpty() &&
                                     lineBuffer.values.all { it.depth == al.depth }
@@ -238,24 +256,6 @@ class StockfishEngine(private val context: Context) {
             writer?.flush()
         } catch (e: Exception) {
             Log.e(TAG, "Send command failed: $cmd -> ${e.message}")
-        }
-    }
-
-    private fun extractBinary(): File? {
-        return try {
-            val stockfishDir = File(context.filesDir, "stockfish")
-            stockfishDir.mkdirs()
-            val binary = File(stockfishDir, "stockfish")
-            if (!binary.exists() || binary.length() == 0L) {
-                context.assets.open(STOCKFISH_ASSET).use { input ->
-                    binary.outputStream().use { output -> input.copyTo(output) }
-                }
-                binary.setExecutable(true)
-            }
-            binary
-        } catch (e: Exception) {
-            Log.e(TAG, "Extract binary failed — stockfish not in assets: ${e.message}")
-            null
         }
     }
 

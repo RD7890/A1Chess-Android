@@ -15,6 +15,7 @@ data class ChessMove(
     val san: String,
     val fen: String,
     val isCapture: Boolean = false,
+    val promotion: String? = null,
 )
 
 data class Arrow(
@@ -39,11 +40,14 @@ data class GameState(
     val gameResult: String? = null,
     val isFlipped: Boolean = false,
     val currentMoveIndex: Int = -1,
+    val canGoBack: Boolean = false,
+    val canGoForward: Boolean = false,
 )
 
 class ChessGame {
     private val board = Board()
     private val moveHistory = mutableListOf<ChessMove>()
+    private val redoStack = mutableListOf<Triple<String, String, String>>() // from, to, promo
 
     private val _state = MutableStateFlow(GameState())
     val state: StateFlow<GameState> = _state
@@ -56,6 +60,7 @@ class ChessGame {
     fun reset(fen: String = START_FEN) {
         board.loadFromFen(fen)
         moveHistory.clear()
+        redoStack.clear()
         updateState()
     }
 
@@ -96,7 +101,7 @@ class ChessGame {
         return false
     }
 
-    fun tryMove(fromSq: String, toSq: String): Boolean {
+    fun tryMove(fromSq: String, toSq: String, promoOverride: String? = null): Boolean {
         val from = Square.valueOf(fromSq.uppercase())
         val to = Square.valueOf(toSq.uppercase())
 
@@ -108,7 +113,7 @@ class ChessGame {
                 ?: legalMoves.first()
         } else legalMoves.first()
 
-        val isCapture = board.getPiece(to) != Piece.NONE || move.toString().contains("x")
+        val isCapture = board.getPiece(to) != Piece.NONE
         val san = getSan(move)
 
         board.doMove(move)
@@ -121,6 +126,34 @@ class ChessGame {
             isCapture = isCapture,
         )
         moveHistory.add(chessMove)
+        redoStack.clear() // new move clears redo history
+        updateState()
+        return true
+    }
+
+    fun navigateBack(): Boolean {
+        if (moveHistory.isEmpty()) return false
+        val last = moveHistory.removeLast()
+        redoStack.add(Triple(last.from, last.to, last.promotion ?: ""))
+        board.undoMove()
+        updateState()
+        return true
+    }
+
+    fun navigateForward(): Boolean {
+        if (redoStack.isEmpty()) return false
+        val (from, to, _) = redoStack.removeLast()
+        val fromSq = Square.valueOf(from.uppercase())
+        val toSq = Square.valueOf(to.uppercase())
+        val legalMoves = board.legalMoves().filter { it.from == fromSq && it.to == toSq }
+        if (legalMoves.isEmpty()) return false
+        val move = legalMoves.firstOrNull {
+            it.promotion == Piece.WHITE_QUEEN || it.promotion == Piece.BLACK_QUEEN
+        } ?: legalMoves.first()
+        val isCapture = board.getPiece(toSq) != Piece.NONE
+        val san = getSan(move)
+        board.doMove(move)
+        moveHistory.add(ChessMove(from, to, san, board.fen, isCapture))
         updateState()
         return true
     }
@@ -129,6 +162,7 @@ class ChessGame {
         if (moveHistory.isEmpty()) return false
         board.undoMove()
         moveHistory.removeLastOrNull()
+        redoStack.clear()
         updateState()
         return true
     }
@@ -170,6 +204,10 @@ class ChessGame {
         _state.value = _state.value.copy(isFlipped = !_state.value.isFlipped)
     }
 
+    fun setArrows(arrows: List<Arrow>) {
+        _state.value = _state.value.copy(arrows = arrows)
+    }
+
     fun addArrow(from: String, to: String, color: ArrowColor = ArrowColor.GREEN) {
         val current = _state.value.arrows.toMutableList()
         val existing = current.indexOfFirst { it.from == from && it.to == to }
@@ -189,9 +227,7 @@ class ChessGame {
             board.isStaleMate -> "1/2-1/2"
             else -> null
         }
-
         val lastMove = moveHistory.lastOrNull()?.let { it.from to it.to }
-
         _state.value = _state.value.copy(
             fen = board.fen,
             moves = moveHistory.toList(),
@@ -202,14 +238,12 @@ class ChessGame {
             isGameOver = isOver,
             gameResult = result,
             currentMoveIndex = moveHistory.size - 1,
+            canGoBack = moveHistory.isNotEmpty(),
+            canGoForward = redoStack.isNotEmpty(),
         )
     }
 
     private fun getSan(move: Move): String {
-        return try {
-            move.toString()
-        } catch (e: Exception) {
-            move.toString()
-        }
+        return try { move.toString() } catch (e: Exception) { move.toString() }
     }
 }

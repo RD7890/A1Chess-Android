@@ -40,7 +40,7 @@ jobs:
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
-            -d text="$(printf '🔨 *A1 Chess — Build Started*\n\n📌 Branch: `%s`\n🔢 Build: #%s\n📝 Commit: `%s`\n\n⏳ Compiling Stockfish 10 + assembling APK...' \
+            -d text="$(printf '🔨 *A1 Chess v1.1 — Build Started*\n\n📌 Branch: `%s`\n🔢 Build: #%s\n📝 Commit: `%s`\n\n⏳ Compiling Stockfish 16 + assembling APK...' \
               '${{ github.ref_name }}' '${{ github.run_number }}' "$SHORT_SHA")"
 
       # ── 2. Checkout ──────────────────────────────────────────────────────
@@ -76,15 +76,15 @@ jobs:
             ${{ runner.os }}-gradle-
 
       # ── 6. Stockfish binary cache ────────────────────────────────────────
-      - name: Restore Stockfish 10 ARM64 cache
+      - name: Restore Stockfish 16 ARM64 cache
         id: sf-cache
         uses: actions/cache@v4
         with:
           path: app/src/main/assets/stockfish
-          key: stockfish-10-arm64-ndk-r25c-v3
+          key: stockfish-16-arm64-ndk-r25c-v1
 
-      # ── 7. Build Stockfish 10 from source ────────────────────────────────
-      - name: Build Stockfish 10 for Android ARM64
+      # ── 7. Build Stockfish 16 from source ────────────────────────────────
+      - name: Build Stockfish 16 for Android ARM64
         if: steps.sf-cache.outputs.cache-hit != 'true'
         env:
           NDK_PATH: ${{ steps.setup-ndk.outputs.ndk-path }}
@@ -92,22 +92,22 @@ jobs:
           set -e
           sudo apt-get install -y --no-install-recommends build-essential
 
-          curl -fsSL https://github.com/official-stockfish/Stockfish/archive/refs/tags/sf_10.tar.gz | tar -xz
-          cd Stockfish-sf_10/src
+          curl -fsSL https://github.com/official-stockfish/Stockfish/archive/refs/tags/sf_16.tar.gz | tar -xz
+          cd Stockfish-sf_16/src
 
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
           CXX_BIN="$TOOLCHAIN/bin/aarch64-linux-android21-clang++"
 
-          # SF10 config-sanity tries to RUN the compiled ARM64 binary on the
-          # x86 host — that fails when cross-compiling. Skip it.
-          sed -i 's/^build: config-sanity/build:/' Makefile
+          # SF16 config-sanity tries to RUN the compiled ARM64 binary on the
+          # x86 host — skip it for cross-compilation.
+          sed -i 's/^build: config-sanity/build:/' Makefile 2>/dev/null || true
           echo "Patched: config-sanity skipped for cross-compilation"
 
           make -j$(nproc) \
             ARCH=armv8 \
             COMP=clang \
             CXX="$CXX_BIN" \
-            CXXFLAGS="-O3 -DNDEBUG -std=c++14" \
+            CXXFLAGS="-O2 -DNDEBUG -std=c++17" \
             LDFLAGS="-static-libstdc++ -lm" \
             build
 
@@ -120,6 +120,7 @@ jobs:
         run: |
           [ -f app/src/main/assets/stockfish ] || { echo "FATAL: Missing Stockfish binary"; exit 1; }
           echo "OK: $(wc -c < app/src/main/assets/stockfish) bytes"
+          file app/src/main/assets/stockfish || true
 
       # ── 9. Generate signing keystore ──────────────────────────────────────
       - name: Generate signing keystore
@@ -141,7 +142,7 @@ jobs:
       - name: chmod gradlew
         run: chmod +x ./gradlew
 
-      # ── 12. Assemble Release APK (log captured) ───────────────────────────
+      # ── 12. Assemble Release APK ──────────────────────────────────────────
       - name: Assemble Release APK
         run: |
           set -o pipefail
@@ -181,8 +182,18 @@ jobs:
           tag_name: v${{ steps.version.outputs.name }}-build.${{ github.run_number }}
           name: "A1 Chess v${{ steps.version.outputs.name }} (Build #${{ github.run_number }})"
           body: |
-            **A1 Chess — Automated Release**
-            Branch: `${{ github.ref_name }}` | Commit: `${{ github.sha }}` | Engine: Stockfish 10 (ARM64)
+            **A1 Chess v1.1 — Automated Release**
+
+            Branch: `${{ github.ref_name }}` | Commit: `${{ github.sha }}`
+            Engine: **Stockfish 16** (ARM64, compiled from source)
+
+            **What's new in v1.1:**
+            - Stockfish 16 engine (upgraded from 10)
+            - Analysis panel open by default
+            - Live arrow updates as engine thinks (partial results per depth)
+            - Move grade badges: Brilliant / Best / Good / Inaccuracy / Mistake / Blunder
+            - Depth indicator shown next to each analysis line while thinking
+            - Engine unavailable warning when binary is missing
           draft: false
           prerelease: true
           files: app/build/outputs/apk/release/A1Chess-*.apk
@@ -197,11 +208,10 @@ jobs:
           ARTIFACT_URL="https://github.com/RD7890/A1Chess-Android/actions/runs/${{ github.run_id }}"
 
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          # 1. Send success message
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
-            -d text="$(printf '✅ *A1 Chess Build #%s — SUCCESS*\n\n📦 APK: `%s`\n🌿 Branch: `%s`\n🔖 Commit: `%s`\n\n🔗 *Download APK:*\n[GitHub Release](%s)\n[Build Artifacts](%s)\n\n🕐 Build took: check Actions page' \
+            -d text="$(printf '✅ *A1 Chess v1.1 Build #%s — SUCCESS*\n\n📦 APK: `%s`\n🌿 Branch: `%s`\n🔖 Commit: `%s`\n⚙️ Engine: Stockfish 16 ARM64\n\n🔗 *Download APK:*\n[GitHub Release](%s)\n[Build Artifacts](%s)' \
               '${{ github.run_number }}' \
               '${{ steps.version.outputs.apk_name }}' \
               '${{ github.ref_name }}' \
@@ -209,7 +219,6 @@ jobs:
               "$RELEASE_URL" \
               "$ARTIFACT_URL")"
 
-          # 2. Send build log as file (tail last 200 lines to keep it readable)
           tail -200 build.log > build_summary.log
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
             -F chat_id="${TG_CHAT_ID}" \
@@ -223,17 +232,15 @@ jobs:
           ACTIONS_URL="https://github.com/RD7890/A1Chess-Android/actions/runs/${{ github.run_id }}"
 
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          # 1. Send failure alert
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
-            -d text="$(printf '❌ *A1 Chess Build #%s — FAILED*\n\n🌿 Branch: `%s`\n🔖 Commit: `%s`\n\n🔍 [View full logs](%s)\n\nLog excerpt attached below 👇' \
+            -d text="$(printf '❌ *A1 Chess v1.1 Build #%s — FAILED*\n\n🌿 Branch: `%s`\n🔖 Commit: `%s`\n\n🔍 [View full logs](%s)\n\nLog excerpt attached below 👇' \
               '${{ github.run_number }}' \
               '${{ github.ref_name }}' \
               "$SHORT_SHA" \
               "$ACTIONS_URL")"
 
-          # 2. Send last 200 lines of whatever log we have
           if [ -f build.log ]; then
             tail -200 build.log > fail_log.txt
           else

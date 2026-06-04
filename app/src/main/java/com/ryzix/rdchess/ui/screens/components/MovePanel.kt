@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,6 +27,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ryzix.rdchess.chess.AnalysisLine
 import com.ryzix.rdchess.chess.ChessMove
+import com.ryzix.rdchess.viewmodel.MoveGrade
+import com.ryzix.rdchess.viewmodel.MoveGradeResult
 import kotlinx.coroutines.launch
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -37,16 +40,20 @@ fun StockfishPanel(
     eval: Float,
     isThinking: Boolean,
     engineEnabled: Boolean,
+    engineAvailable: Boolean,
     analysisLines: List<AnalysisLine>,
     moves: List<ChessMove>,
     showMoveList: Boolean,
+    moveGrade: MoveGradeResult?,
     onToggleEngine: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    // Default to expanded so analysis is immediately visible
+    var expanded by remember { mutableStateOf(true) }
 
     Column(modifier = modifier) {
-        // ── Stockfish strip ──────────────────────────────────────────────
+
+        // ── Stockfish strip ──────────────────────────────────────────────────
         Surface(
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 4.dp,
@@ -54,8 +61,8 @@ fun StockfishPanel(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(enabled = engineEnabled && analysisLines.isNotEmpty()) {
-                        expanded = !expanded
+                    .clickable(enabled = engineEnabled && engineAvailable) {
+                        if (isThinking || analysisLines.isNotEmpty()) expanded = !expanded
                     }
                     .padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -75,29 +82,58 @@ fun StockfishPanel(
                 Spacer(modifier = Modifier.width(10.dp))
 
                 // Eval chip
-                if (engineEnabled) {
+                if (engineEnabled && engineAvailable) {
                     EvalChip(eval = eval, isThinking = isThinking)
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+
+                // Move grade badge
+                if (moveGrade != null && engineEnabled && engineAvailable) {
+                    MoveGradeBadge(grade = moveGrade)
+                    Spacer(modifier = Modifier.width(6.dp))
                 }
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // On / Off toggle button
+                // Engine not available warning
+                if (!engineAvailable) {
+                    Icon(
+                        imageVector = Icons.Rounded.ErrorOutline,
+                        contentDescription = "Engine unavailable",
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+
+                // On / Off toggle
                 Surface(
                     shape = RoundedCornerShape(6.dp),
-                    color = if (engineEnabled) Color(0xFF2E7D32) else MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.clickable { onToggleEngine() },
+                    color = when {
+                        !engineAvailable -> MaterialTheme.colorScheme.errorContainer
+                        engineEnabled    -> Color(0xFF2E7D32)
+                        else             -> MaterialTheme.colorScheme.surfaceVariant
+                    },
+                    modifier = Modifier.clickable(enabled = engineAvailable) { onToggleEngine() },
                 ) {
                     Text(
-                        text = if (engineEnabled) "On" else "Off",
+                        text = when {
+                            !engineAvailable -> "N/A"
+                            engineEnabled    -> "On"
+                            else             -> "Off"
+                        },
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = if (engineEnabled) Color.White
-                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                        color = when {
+                            !engineAvailable -> MaterialTheme.colorScheme.onErrorContainer
+                            engineEnabled    -> Color.White
+                            else             -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                        },
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                     )
                 }
 
-                // Expand chevron (only when engine on and lines available)
-                if (engineEnabled && analysisLines.isNotEmpty()) {
+                // Expand chevron
+                if (engineEnabled && engineAvailable && (isThinking || analysisLines.isNotEmpty())) {
                     Spacer(modifier = Modifier.width(6.dp))
                     Icon(
                         imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
@@ -109,9 +145,9 @@ fun StockfishPanel(
             }
         }
 
-        // ── Expanded analysis lines ──────────────────────────────────────
+        // ── Expanded analysis area ────────────────────────────────────────────
         AnimatedVisibility(
-            visible = expanded && engineEnabled && analysisLines.isNotEmpty(),
+            visible = expanded && engineEnabled && engineAvailable,
             enter = expandVertically(),
             exit = shrinkVertically(),
         ) {
@@ -125,22 +161,71 @@ fun StockfishPanel(
                         .padding(horizontal = 14.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    if (isThinking && analysisLines.isEmpty()) {
+                        // "Thinking…" placeholder while engine has no lines yet
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                            )
+                            Text(
+                                text = "Engine thinking…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            )
+                        }
+                    }
                     analysisLines.forEach { line ->
-                        AnalysisLineRow(line = line, bestEval = analysisLines.firstOrNull()?.eval ?: line.eval)
+                        AnalysisLineRow(
+                            line = line,
+                            bestEval = analysisLines.firstOrNull()?.eval ?: line.eval,
+                            isThinking = isThinking,
+                        )
                     }
                 }
             }
         }
 
-        // ── Move list ────────────────────────────────────────────────────
+        // ── Move list ─────────────────────────────────────────────────────────
         AnimatedVisibility(
             visible = showMoveList,
             enter = expandVertically(),
             exit = shrinkVertically(),
         ) {
-            MoveListRow(
-                moves = moves,
-                modifier = Modifier.fillMaxWidth(),
+            MoveListRow(moves = moves, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Move grade badge
+// ────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun MoveGradeBadge(grade: MoveGradeResult) {
+    val bgColor = Color(grade.grade.colorHex)
+    Surface(
+        shape = RoundedCornerShape(5.dp),
+        color = bgColor.copy(alpha = 0.18f),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = grade.grade.symbol,
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = bgColor,
+            )
+            Text(
+                text = grade.grade.label,
+                style = MaterialTheme.typography.labelSmall,
+                color = bgColor,
             )
         }
     }
@@ -153,7 +238,7 @@ fun StockfishPanel(
 @Composable
 private fun EvalChip(eval: Float, isThinking: Boolean) {
     val text = when {
-        isThinking -> "..."
+        isThinking && eval == 0f -> "…"
         kotlin.math.abs(eval) >= 9.9f -> if (eval > 0) "M" else "-M"
         eval >= 0 -> "+%.1f".format(eval)
         else -> "%.1f".format(eval)
@@ -172,12 +257,12 @@ private fun EvalChip(eval: Float, isThinking: Boolean) {
 }
 
 @Composable
-private fun AnalysisLineRow(line: AnalysisLine, bestEval: Float) {
+private fun AnalysisLineRow(line: AnalysisLine, bestEval: Float, isThinking: Boolean) {
     val diff = bestEval - line.eval
     val dotColor = when {
-        line.rank == 1       -> Color(0xFF4CAF50) // best — green
-        diff < 0.3f          -> Color(0xFFFFC107) // close — amber
-        else                 -> Color(0xFFF44336) // worse — red
+        line.rank == 1 -> Color(0xFF4CAF50)
+        diff < 0.3f    -> Color(0xFFFFC107)
+        else           -> Color(0xFFF44336)
     }
 
     val moveText = uciToArrow(line.move)
@@ -193,7 +278,6 @@ private fun AnalysisLineRow(line: AnalysisLine, bestEval: Float) {
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top,
     ) {
-        // Coloured dot
         Box(
             modifier = Modifier
                 .padding(top = 5.dp)
@@ -219,6 +303,14 @@ private fun AnalysisLineRow(line: AnalysisLine, bestEval: Float) {
                     style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 )
+                if (isThinking && line.depth > 0) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "d${line.depth}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 9.sp),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
+                    )
+                }
             }
             if (contText.isNotBlank()) {
                 Text(
@@ -278,9 +370,7 @@ private fun MoveListRow(moves: List<ChessMove>, modifier: Modifier = Modifier) {
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
                                 fontSize = 12.sp,
                             )
-                            pair.forEach { move ->
-                                MoveChip(san = move.san, isActive = false)
-                            }
+                            pair.forEach { move -> MoveChip(san = move.san, isActive = false) }
                         }
                     }
                 }
@@ -293,8 +383,7 @@ private fun MoveListRow(moves: List<ChessMove>, modifier: Modifier = Modifier) {
 private fun MoveChip(san: String, isActive: Boolean) {
     Surface(
         shape = RoundedCornerShape(5.dp),
-        color = if (isActive) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.surfaceVariant,
+        color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
         modifier = Modifier.padding(vertical = 1.dp),
     ) {
         Text(
@@ -304,8 +393,7 @@ private fun MoveChip(san: String, isActive: Boolean) {
                 fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
                 fontSize = 12.sp,
             ),
-            color = if (isActive) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onSurface,
+            color = if (isActive) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
         )
     }

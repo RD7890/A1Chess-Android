@@ -26,19 +26,21 @@ fun GameScreen(
     onBack: () -> Unit,
     vm: GameViewModel = viewModel(),
 ) {
-    val state          by vm.gameState.collectAsState()
-    val eval           by vm.engineEval.collectAsState()
-    val isThinking     by vm.isEngineThinking.collectAsState()
-    val engineEnabled  by vm.engineEnabled.collectAsState()
-    val analysisLines  by vm.analysisLines.collectAsState()
-    val prefs          by vm.prefs.collectAsState()
-    val whiteTimeSecs  by vm.whiteTimeSecs.collectAsState()
-    val blackTimeSecs  by vm.blackTimeSecs.collectAsState()
-    val isTimerPaused  by vm.isTimerPaused.collectAsState()
+    val state           by vm.gameState.collectAsState()
+    val eval            by vm.engineEval.collectAsState()
+    val isThinking      by vm.isEngineThinking.collectAsState()
+    val engineEnabled   by vm.engineEnabled.collectAsState()
+    val engineAvailable by vm.engineAvailable.collectAsState()
+    val analysisLines   by vm.analysisLines.collectAsState()
+    val moveGrade       by vm.lastMoveGrade.collectAsState()
+    val prefs           by vm.prefs.collectAsState()
+    val whiteTimeSecs   by vm.whiteTimeSecs.collectAsState()
+    val blackTimeSecs   by vm.blackTimeSecs.collectAsState()
+    val isTimerPaused   by vm.isTimerPaused.collectAsState()
 
-    var showMoveList        by remember { mutableStateOf(false) }
-    var showSettingsSheet   by remember { mutableStateOf(false) }
-    var showNewGameDialog   by remember { mutableStateOf(false) }
+    var showMoveList      by remember { mutableStateOf(false) }
+    var showSettingsSheet by remember { mutableStateOf(false) }
+    var showNewGameDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         vm.newGame(playAsWhite = true, otbMode = true)
@@ -75,9 +77,9 @@ fun GameScreen(
             val lastMoveText = remember(state.moves) {
                 val moves = state.moves
                 if (moves.isEmpty()) return@remember ""
-                val moveNum  = (moves.size + 1) / 2
+                val moveNum     = (moves.size + 1) / 2
                 val isWhiteMove = moves.size % 2 == 1
-                val san = moves.lastOrNull()?.san ?: ""
+                val san         = moves.lastOrNull()?.san ?: ""
                 if (isWhiteMove) "$moveNum. $san" else "$moveNum... $san"
             }
             if (lastMoveText.isNotEmpty()) {
@@ -100,10 +102,10 @@ fun GameScreen(
                     .graphicsLayer { rotationZ = 180f },
             ) {
                 PlayerTimerRow(
-                    name = "Black",
-                    timeSecs = blackTimeSecs,
-                    isActive = !state.isWhiteTurn && !state.isGameOver,
-                    isPaused = isTimerPaused,
+                    name      = "Black",
+                    timeSecs  = blackTimeSecs,
+                    isActive  = !state.isWhiteTurn && !state.isGameOver,
+                    isPaused  = isTimerPaused,
                 )
             }
 
@@ -114,16 +116,16 @@ fun GameScreen(
                     .aspectRatio(1f),
             ) {
                 ChessBoard(
-                    modifier = Modifier.fillMaxSize(),
-                    state = state,
-                    onSquareTap = { sq -> vm.onSquareTap(sq) },
+                    modifier        = Modifier.fillMaxSize(),
+                    state           = state,
+                    onSquareTap     = { sq -> vm.onSquareTap(sq) },
                     showCoordinates = true,
                 )
             }
 
             // ── White player row ──────────────────────────────────────────
             PlayerTimerRow(
-                name = "White",
+                name     = "White",
                 timeSecs = whiteTimeSecs,
                 isActive = state.isWhiteTurn && !state.isGameOver,
                 isPaused = isTimerPaused,
@@ -131,32 +133,34 @@ fun GameScreen(
 
             // ── In-game control bar ───────────────────────────────────────
             GameBottomBar(
-                onMenu            = { showMoveList = !showMoveList },
-                onEngineStrength  = { showSettingsSheet = true },
-                onPauseToggle     = { vm.toggleTimer() },
-                onBack            = { vm.navigateBack() },
-                onForward         = { vm.navigateForward() },
-                onUndo            = { vm.undoOtbMove() },
-                isPaused          = isTimerPaused,
-                canBack           = state.canGoBack,
-                canForward        = state.canGoForward,
+                onMenu           = { showMoveList = !showMoveList },
+                onEngineStrength = { showSettingsSheet = true },
+                onPauseToggle    = { vm.toggleTimer() },
+                onBack           = { vm.navigateBack() },
+                onForward        = { vm.navigateForward() },
+                onUndo           = { vm.undoOtbMove() },
+                isPaused         = isTimerPaused,
+                canBack          = state.canGoBack,
+                canForward       = state.canGoForward,
             )
 
             // ── Stockfish analysis strip + optional move list ─────────────
             StockfishPanel(
-                eval           = eval,
-                isThinking     = isThinking,
-                engineEnabled  = engineEnabled,
-                analysisLines  = analysisLines,
-                moves          = state.moves,
-                showMoveList   = showMoveList,
-                onToggleEngine = { vm.toggleEngine() },
-                modifier       = Modifier.fillMaxWidth(),
+                eval            = eval,
+                isThinking      = isThinking,
+                engineEnabled   = engineEnabled,
+                engineAvailable = engineAvailable,
+                analysisLines   = analysisLines,
+                moves           = state.moves,
+                showMoveList    = showMoveList,
+                moveGrade       = moveGrade,
+                onToggleEngine  = { vm.toggleEngine() },
+                modifier        = Modifier.fillMaxWidth(),
             )
         }
     }
 
-    // ── Game-over dialog ──────────────────────────────────────────────────
+    // ── Game-over dialog ──────────────────────────────────────────────────────
     if (state.isGameOver && state.gameResult != null) {
         AlertDialog(
             onDismissRequest = {},
@@ -188,7 +192,7 @@ fun GameScreen(
         )
     }
 
-    // ── New game dialog ───────────────────────────────────────────────────
+    // ── New game dialog ───────────────────────────────────────────────────────
     if (showNewGameDialog) {
         AlertDialog(
             onDismissRequest = { showNewGameDialog = false },
@@ -222,7 +226,7 @@ fun GameScreen(
         )
     }
 
-    // ── Engine settings sheet ─────────────────────────────────────────────
+    // ── Engine settings sheet ─────────────────────────────────────────────────
     if (showSettingsSheet) {
         ModalBottomSheet(
             onDismissRequest = { showSettingsSheet = false },
@@ -230,6 +234,7 @@ fun GameScreen(
         ) {
             InlineEngineSettings(
                 prefs              = prefs,
+                engineAvailable    = engineAvailable,
                 onLevelChange      = { vm.saveLevel(it) },
                 onSearchTimeChange = { vm.saveSearchTime(it) },
                 onMultiPvChange    = { vm.saveMultiPv(it) },
@@ -258,7 +263,6 @@ private fun PlayerTimerRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Timer box
         Surface(
             shape = RoundedCornerShape(7.dp),
             color = when {
@@ -282,13 +286,11 @@ private fun PlayerTimerRow(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
             )
         }
-
-        // Player name
         Text(
             text = name,
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium),
             color = if (isActive) MaterialTheme.colorScheme.onSurface
-                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
         )
     }
 }
@@ -300,12 +302,13 @@ private fun formatTime(totalSecs: Int): String {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-//  Engine settings (reused from settings sheet)
+//  Engine settings sheet (inline)
 // ────────────────────────────────────────────────────────────────────────────
 
 @Composable
 fun InlineEngineSettings(
     prefs: com.ryzix.rdchess.viewmodel.AppPrefs,
+    engineAvailable: Boolean = true,
     onLevelChange: (Int) -> Unit,
     onSearchTimeChange: (Int) -> Unit,
     onMultiPvChange: (Int) -> Unit,
@@ -318,43 +321,66 @@ fun InlineEngineSettings(
             modifier = Modifier.padding(bottom = 16.dp),
         )
 
-        EngineRow(label = "Engine", value = "Stockfish 10")
+        EngineRow(
+            label = "Engine",
+            value = if (engineAvailable) "Stockfish 16 (ARM64)" else "Not available — requires build",
+        )
+
+        if (!engineAvailable) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.errorContainer,
+            ) {
+                Text(
+                    text = "The Stockfish binary was not found in assets. Install the APK built by CI (GitHub Actions) which includes the compiled engine.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(12.dp),
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
 
         SliderRow(
-            label     = "Level",
-            value     = (prefs.levelIndex + 1).toFloat(),
+            label      = "Level",
+            value      = (prefs.levelIndex + 1).toFloat(),
             valueRange = 1f..12f,
-            steps     = 10,
-            display   = "${prefs.levelIndex + 1}",
+            steps      = 10,
+            display    = "${prefs.levelIndex + 1}",
+            enabled    = engineAvailable,
             onValueChange = { onLevelChange(it.toInt() - 1) },
         )
 
         SliderRow(
-            label     = "Search time",
-            value     = prefs.searchTimeMs.toFloat(),
+            label      = "Search time",
+            value      = prefs.searchTimeMs.toFloat(),
             valueRange = 500f..5000f,
-            steps     = 8,
-            display   = "${prefs.searchTimeMs / 1000f}s",
+            steps      = 8,
+            display    = "${prefs.searchTimeMs / 1000f}s",
+            enabled    = engineAvailable,
             onValueChange = { onSearchTimeChange(it.toInt()) },
         )
 
         SliderRow(
-            label     = "Lines (MultiPV)",
-            value     = prefs.multiPv.toFloat(),
+            label      = "Lines (MultiPV)",
+            value      = prefs.multiPv.toFloat(),
             valueRange = 1f..5f,
-            steps     = 3,
-            display   = "${prefs.multiPv}",
+            steps      = 3,
+            display    = "${prefs.multiPv}",
+            enabled    = engineAvailable,
             onValueChange = { onMultiPvChange(it.toInt()) },
         )
 
         SliderRow(
-            label     = "CPUs",
-            value     = prefs.threads.toFloat(),
+            label      = "CPUs",
+            value      = prefs.threads.toFloat(),
             valueRange = 1f..4f,
-            steps     = 2,
-            display   = "${prefs.threads}",
+            steps      = 2,
+            display    = "${prefs.threads}",
+            enabled    = engineAvailable,
             onValueChange = { onThreadsChange(it.toInt()) },
         )
     }
@@ -385,6 +411,7 @@ private fun SliderRow(
     valueRange: ClosedFloatingPointRange<Float>,
     steps: Int,
     display: String,
+    enabled: Boolean = true,
     onValueChange: (Float) -> Unit,
 ) {
     Row(
@@ -397,14 +424,17 @@ private fun SliderRow(
             label,
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.width(120.dp),
+            color = if (enabled) MaterialTheme.colorScheme.onSurface
+            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
         )
         Slider(
-            value          = value,
-            onValueChange  = onValueChange,
-            valueRange     = valueRange,
-            steps          = steps,
-            modifier       = Modifier.weight(1f),
-            colors         = SliderDefaults.colors(
+            value         = value,
+            onValueChange = onValueChange,
+            valueRange    = valueRange,
+            steps         = steps,
+            enabled       = enabled,
+            modifier      = Modifier.weight(1f),
+            colors        = SliderDefaults.colors(
                 thumbColor       = MaterialTheme.colorScheme.primary,
                 activeTrackColor = MaterialTheme.colorScheme.primary,
             ),
@@ -413,7 +443,8 @@ private fun SliderRow(
             display,
             style    = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.width(40.dp),
-            color    = MaterialTheme.colorScheme.primary,
+            color    = if (enabled) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
         )
     }
 }

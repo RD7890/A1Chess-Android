@@ -67,6 +67,16 @@ class StockfishEngine(private val context: Context) {
     var isReady = false
         private set
 
+    // ── Pending analysis (set by startAnalysis, consumed on readyok) ──────────
+    @Volatile private var pendingFen: String? = null
+    @Volatile private var pendingSettings: EngineSettings? = null
+    @Volatile private var isAnalysisPending = false
+
+    // ── Pending search (vs-computer, same barrier pattern) ────────────────────
+    @Volatile private var pendingSearchFen: String? = null
+    @Volatile private var pendingSearchSettings: EngineSettings? = null
+    @Volatile private var isSearchPending = false
+
     fun init(): Boolean {
         return try {
             val binary = extractBinary() ?: return false
@@ -92,25 +102,57 @@ class StockfishEngine(private val context: Context) {
                     val line = reader?.readLine() ?: break
                     Log.d(TAG, "SF> $line")
                     when {
-                        line == "readyok" -> isReady = true
+                        line == "readyok" -> {
+                            isReady = true
+                            // ── start pending analysis ──
+                            if (isAnalysisPending) {
+                                isAnalysisPending = false
+                                val fen = pendingFen
+                                val settings = pendingSettings
+                                pendingFen = null
+                                pendingSettings = null
+                                if (fen != null && settings != null) {
+                                    sendCommand("ucinewgame")
+                                    sendCommand("position fen $fen")
+                                    sendCommand("go movetime ${settings.searchTimeMs}")
+                                    Log.d(TAG, "Analysis started for FEN: $fen")
+                                }
+                            }
+                            // ── start pending search (vs-computer) ──
+                            if (isSearchPending) {
+                                isSearchPending = false
+                                val fen = pendingSearchFen
+                                val settings = pendingSearchSettings
+                                pendingSearchFen = null
+                                pendingSearchSettings = null
+                                if (fen != null && settings != null) {
+                                    sendCommand("ucinewgame")
+                                    sendCommand("position fen $fen")
+                                    sendCommand("go movetime ${settings.searchTimeMs}")
+                                    Log.d(TAG, "Search started for FEN: $fen")
+                                }
+                            }
+                        }
 
                         line.startsWith("bestmove") -> {
                             val parts = line.split(" ")
-                            if (parts.size >= 2 && parts[1] != "(none)") {
-                                _bestMoveFlow.emit(parts[1])
-                            }
-                            // flush collected analysis lines
+                            val move = if (parts.size >= 2) parts[1] else null
+                            // Flush accumulated MultiPV lines from the completed search
                             if (lineBuffer.isNotEmpty()) {
                                 val sorted = lineBuffer.values.sortedBy { it.rank }
                                 _analysisFlow.emit(sorted)
                                 lineBuffer.clear()
+                                Log.d(TAG, "Analysis flushed: ${sorted.size} lines, best=${sorted.firstOrNull()?.move} eval=${sorted.firstOrNull()?.eval}")
+                            }
+                            // Bestmove for vs-computer mode
+                            if (move != null && move != "(none)") {
+                                _bestMoveFlow.emit(move)
                             }
                         }
 
                         line.startsWith("info") && line.contains("multipv") -> {
                             parseMultiPvLine(line)?.let { al ->
                                 lineBuffer[al.rank] = al
-                                // also emit best eval (rank 1)
                                 if (al.rank == 1) _evalFlow.emit(al.eval)
                             }
                         }
@@ -138,23 +180,43 @@ class StockfishEngine(private val context: Context) {
         sendCommand("setoption name MultiPV value ${settings.multiPv}")
     }
 
-    fun startSearch(fen: String, settings: EngineSettings) {
-        lineBuffer.clear()
-        sendCommand("stop")
-        sendCommand("ucinewgame")
-        sendCommand("position fen $fen")
-        sendCommand("go movetime ${settings.searchTimeMs}")
+    /**
+     * Analysis search (OTB pass-and-play / post-engine-move).
+     * Uses isready/readyok as a pipeline barrier so the stop's bestmove is
+     * fully processed before the new position + go are sent — this prevents
+     * a racing stop-bestmove from flushing the new search's lineBuffer early.
+     */
+    fun startAnalysis(fen: String, settings: EngineSettings) {
+        lineBuffer.clear()          // discard any leftover from a previous search
+        pendingFen = fen
+        pendingSettings = settings
+        isAnalysisPending = true
+        sendCommand("stop")         // stop running search (if any); SF emits bestmove — lineBuffer is empty so no false flush
+        sendCommand("isready")      // SF sends readyok only AFTER processing the stop's bestmove
+        // actual position + go sent in readyok handler
     }
 
-    /** Analysis-only search — emits analysisFlow when done, no bestmove used. */
-    fun startAnalysis(fen: String, settings: EngineSettings) {
+    /**
+     * Engine-move search (vs-computer mode).
+     * Same barrier pattern as startAnalysis.
+     */
+    fun startSearch(fen: String, settings: EngineSettings) {
         lineBuffer.clear()
+        pendingSearchFen = fen
+        pendingSearchSettings = settings
+        isSearchPending = true
         sendCommand("stop")
-        sendCommand("position fen $fen")
-        sendCommand("go movetime ${settings.searchTimeMs}")
+        sendCommand("isready")
     }
 
     fun stop() {
+        lineBuffer.clear()
+        isAnalysisPending = false
+        isSearchPending = false
+        pendingFen = null
+        pendingSettings = null
+        pendingSearchFen = null
+        pendingSearchSettings = null
         sendCommand("stop")
     }
 
@@ -201,7 +263,7 @@ class StockfishEngine(private val context: Context) {
      */
     private fun parseMultiPvLine(line: String): AnalysisLine? {
         return try {
-            val tokens = line.split(" ")
+            val tokens = line.split(" ").filter { it.isNotBlank() }
             var rank = -1
             var evalCp: Float? = null
             var isMate = false
@@ -234,8 +296,9 @@ class StockfishEngine(private val context: Context) {
             if (rank < 1 || evalCp == null) return null
 
             val pvMoves = if (pvStart >= 0) tokens.drop(pvStart) else emptyList()
-            val mainMove = pvMoves.firstOrNull() ?: return null
-            val continuation = pvMoves.drop(1).take(5) // up to 5 follow-up moves
+            val mainMove = pvMoves.firstOrNull()?.trimEnd() ?: return null
+            if (mainMove.length < 4) return null
+            val continuation = pvMoves.drop(1).take(5).map { it.trimEnd() }
 
             AnalysisLine(
                 rank = rank,
@@ -245,7 +308,10 @@ class StockfishEngine(private val context: Context) {
                 mateIn = mateIn,
                 continuation = continuation,
             )
-        } catch (e: Exception) { null }
+        } catch (e: Exception) {
+            Log.e(TAG, "parseMultiPvLine error: ${e.message} | line: $line")
+            null
+        }
     }
 
     private fun parseEval(line: String): Float? {

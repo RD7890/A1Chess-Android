@@ -270,9 +270,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _isTimerPaused.value = false
         chessGame.reset()
 
-        if (!otbMode && !playAsWhite) {
-            viewModelScope.launch {
-                delay(500)
+        viewModelScope.launch {
+            // Give the engine a moment to process the stop, then analyse the start position
+            delay(400)
+            if (otbMode) {
+                runAnalysis()
+            } else if (!playAsWhite) {
                 triggerEngineMove()
             }
         }

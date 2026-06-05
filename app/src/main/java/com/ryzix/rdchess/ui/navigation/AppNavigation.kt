@@ -1,9 +1,5 @@
 package com.ryzix.rdchess.ui.navigation
 
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
@@ -24,6 +20,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -33,6 +30,7 @@ import com.ryzix.rdchess.ui.screens.GameScreen
 import com.ryzix.rdchess.ui.screens.HomeScreen
 import com.ryzix.rdchess.ui.screens.SettingsScreen
 import com.ryzix.rdchess.ui.screens.ThemeSettingsScreen
+import com.ryzix.rdchess.viewmodel.GameViewModel
 import kotlinx.coroutines.launch
 
 sealed class Screen(val route: String) {
@@ -45,10 +43,6 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
     NavHost(
         navController = navController,
         startDestination = Screen.Main.route,
-        enterTransition = { slideInHorizontally(tween(280)) { it } },
-        exitTransition = { slideOutHorizontally(tween(280)) { -it } },
-        popEnterTransition = { slideInHorizontally(tween(280)) { -it } },
-        popExitTransition = { slideOutHorizontally(tween(280)) { it } },
     ) {
         composable(Screen.Main.route) {
             MainPagerScreen(onThemeSettings = { navController.navigate(Screen.ThemeSettings.route) })
@@ -59,15 +53,15 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MainPagerScreen(onThemeSettings: () -> Unit) {
     val pagerState = rememberPagerState(pageCount = { 4 })
-    val scope = rememberCoroutineScope()
+    val scope      = rememberCoroutineScope()
+    val vm: GameViewModel = viewModel()
 
-    val navBg    = Color(0xFF181818)
-    val primary  = Color(0xFFFF2541)
-    val muted    = Color(0xFF888888)
+    val navBg     = Color(0xFF181818)
+    val primary   = Color(0xFFFF2541)
+    val muted     = Color(0xFF888888)
     val indicator = Color(0xFF1E0A0B)
 
     Scaffold(
@@ -103,6 +97,9 @@ fun MainPagerScreen(onThemeSettings: () -> Unit) {
     ) { padding ->
         HorizontalPager(
             state = pagerState,
+            // Swipe disabled — only the bottom nav bar can switch tabs.
+            // This is critical to stop accidental mid-game tab changes.
+            userScrollEnabled = false,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
@@ -113,8 +110,18 @@ fun MainPagerScreen(onThemeSettings: () -> Unit) {
                 )
                 1 -> GameScreen(
                     onBack = { scope.launch { pagerState.animateScrollToPage(0) } },
+                    vm = vm,
                 )
-                2 -> GameHistoryScreen()
+                2 -> GameHistoryScreen(
+                    vm = vm,
+                    onGameLoaded = { game ->
+                        vm.loadGameFromHistory(game)
+                        scope.launch { pagerState.animateScrollToPage(1) }
+                    },
+                    onPgnLoaded = {
+                        scope.launch { pagerState.animateScrollToPage(1) }
+                    },
+                )
                 3 -> SettingsScreen(
                     onBack = { scope.launch { pagerState.animateScrollToPage(0) } },
                     onThemeSettings = onThemeSettings,

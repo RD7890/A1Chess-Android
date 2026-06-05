@@ -11,19 +11,21 @@ import androidx.compose.ui.unit.dp
 
 /**
  * In-game control bar:
- *   Menu | Bolt | Pause/Play | ChevronLeft | ChevronRight | Undo
+ *   Menu | Bolt | ChevronLeft | ChevronRight | Undo | Share(PGN)
+ *
+ * Timer/pause button removed — no time controls.
  */
 @Composable
 fun GameBottomBar(
     onMenu: () -> Unit,
     onEngineStrength: () -> Unit,
-    onPauseToggle: () -> Unit,
     onBack: () -> Unit,
     onForward: () -> Unit,
     onUndo: () -> Unit,
-    isPaused: Boolean,
+    onExportPgn: () -> Unit,
     canBack: Boolean,
     canForward: Boolean,
+    isReviewMode: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -40,13 +42,7 @@ fun GameBottomBar(
         ) {
             BarButton(icon = Icons.Rounded.Menu, desc = "Move list", onClick = onMenu)
 
-            BarButton(icon = Icons.Rounded.Bolt, desc = "Engine strength", onClick = onEngineStrength)
-
-            BarButton(
-                icon = if (isPaused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
-                desc = if (isPaused) "Resume timer" else "Pause timer",
-                onClick = onPauseToggle,
-            )
+            BarButton(icon = Icons.Rounded.Bolt, desc = "Engine settings", onClick = onEngineStrength)
 
             BarButton(
                 icon = Icons.Rounded.ChevronLeft,
@@ -62,7 +58,19 @@ fun GameBottomBar(
                 enabled = canForward,
             )
 
-            BarButton(icon = Icons.Rounded.Undo, desc = "Undo move", onClick = onUndo)
+            // Undo only available during a live (non-review) game
+            BarButton(
+                icon = Icons.Rounded.Undo,
+                desc = "Undo move",
+                onClick = onUndo,
+                enabled = !isReviewMode,
+            )
+
+            BarButton(
+                icon = Icons.Rounded.Share,
+                desc = "Export PGN",
+                onClick = onExportPgn,
+            )
         }
     }
 }

@@ -3,6 +3,7 @@ package com.ryzix.rdchess.ui.navigation
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
@@ -56,6 +57,7 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MainPagerScreen(onThemeSettings: () -> Unit) {
     val pagerState = rememberPagerState(pageCount = { 3 })
@@ -102,7 +104,6 @@ fun MainPagerScreen(onThemeSettings: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
-            beyondViewportPageCount = 1,
         ) { page ->
             when (page) {
                 0 -> HomeScreen(

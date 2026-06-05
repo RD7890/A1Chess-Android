@@ -14,12 +14,19 @@ on:
       - '**.md'
   workflow_dispatch: { }
 
+# Native duplicate-run cancellation — replaces styfle/cancel-workflow-action
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
 env:
   TG_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
   TG_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+  # Opt into Node.js 24 now (mandatory from June 16 2026)
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build_release_apk:
@@ -27,12 +34,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ── 0. Cancel duplicate runs ─────────────────────────────────────────
-      - name: Cancel previous runs
-        uses: styfle/cancel-workflow-action@0.12.1
-        with:
-          access_token: ${{ github.token }}
-
       # ── 1. Notify: Build started ─────────────────────────────────────────
       - name: Telegram — Build started
         run: |
@@ -123,10 +124,10 @@ jobs:
           file app/src/main/jniLibs/arm64-v8a/libstockfish.so || true
 
       # ── 9. Permanent signing keystore ─────────────────────────────────────
-      # Set SIGNING_KEYSTORE_B64 as a GitHub repository secret (base64 of .jks)
-      # so every build uses the SAME key — required for APK updates to install
-      # without uninstalling first.  On first run without the secret a fresh
-      # keystore is generated and its base64 is printed so you can save it.
+      # Set SIGNING_KEYSTORE_B64 as a GitHub repo secret (base64 of .jks) so
+      # every build uses the SAME key — needed for APK updates without uninstall.
+      # On first run without the secret a new key is generated and its base64
+      # is printed — copy that block and save it as SIGNING_KEYSTORE_B64.
       - name: Restore / generate signing keystore
         run: |
           mkdir -p signing
@@ -135,9 +136,9 @@ jobs:
             echo "${{ secrets.SIGNING_KEYSTORE_B64 }}" | base64 -d > signing/signing-key.jks
             echo "Keystore restored: $(wc -c < signing/signing-key.jks) bytes"
           else
-            echo "⚠️  No SIGNING_KEYSTORE_B64 secret found — generating a new keystore."
-            echo "   Copy the base64 block below and save it as a GitHub repository"
-            echo "   secret named SIGNING_KEYSTORE_B64 to make signing permanent."
+            echo "⚠️  No SIGNING_KEYSTORE_B64 secret — generating a new keystore."
+            echo "   Copy the base64 block below and save it as a GitHub secret"
+            echo "   named SIGNING_KEYSTORE_B64 to make signing permanent."
             keytool -genkeypair \
               -alias A1Chess -keypass 123456 \
               -keystore signing/signing-key.jks \
@@ -183,7 +184,6 @@ jobs:
       # ── 15. Upload artifact ───────────────────────────────────────────────
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
-        id: upload
         with:
           name: ${{ steps.version.outputs.apk_name }}
           path: app/build/outputs/apk/release/A1Chess-*.apk
@@ -192,7 +192,6 @@ jobs:
       # ── 16. Create GitHub Release ─────────────────────────────────────────
       - name: Create GitHub Release
         if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))
-        id: release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.name }}-build.${{ github.run_number }}
@@ -229,10 +228,8 @@ jobs:
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
             -d text="$(printf '✅ *A1 Chess v1.2 Build #%s — SUCCESS*\n\n📦 APK: `%s`\n🌿 Branch: `%s`\n🔖 Commit: `%s`\n⚙️ Engine: Stockfish 16 ARM64\n\n🔗 *Download APK:*\n[GitHub Release](%s)\n[Build Artifacts](%s)' \
-              '${{ github.run_number }}' \
-              '${{ steps.version.outputs.apk_name }}' \
-              '${{ github.ref_name }}' \
-              "$SHORT_SHA" "$RELEASE_URL" "$ARTIFACT_URL")"
+              '${{ github.run_number }}' '${{ steps.version.outputs.apk_name }}' \
+              '${{ github.ref_name }}' "$SHORT_SHA" "$RELEASE_URL" "$ARTIFACT_URL")"
           tail -200 build.log > build_summary.log
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
             -F chat_id="${TG_CHAT_ID}" \

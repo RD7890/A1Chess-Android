@@ -45,49 +45,34 @@ fun GameScreen(
     // DO NOT call vm.newGame() here — game is restored from DataStore on ViewModel init,
     // and persists across tab switches since the ViewModel lives for the Activity lifetime.
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = if (isReviewMode) "Review" else "Over the board",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        if (isReviewMode) {
-                            Text(
-                                text = "Read-only — tap ← → to step",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                            )
-                        }
-                    }
-                },
-                actions = {
-                    // New game button
-                    IconButton(onClick = { showNewGameDialog = true }) {
-                        Icon(Icons.Rounded.AddCircleOutline, contentDescription = "New game")
-                    }
-                    IconButton(onClick = { showSettingsSheet = true }) {
-                        Icon(Icons.Rounded.Settings, contentDescription = "Engine settings")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-            )
-        },
-    ) { padding ->
-        Column(
+    // Plain Column — no Scaffold/TopAppBar so no WindowInsets status-bar padding is
+    // injected. This prevents the big top gap that appears in floating/pip windows.
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        // ── Compact header row (zero window insets) ───────────────────────────
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                // No vertical scroll on the board area — prevents accidental swipe-away.
-                // The analysis panel below the board scrolls independently if needed.
-                .padding(padding),
-            horizontalAlignment = Alignment.CenterHorizontally,
+                .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 0.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            // ── Last move hint (fixed height to avoid layout shift) ───────────
+            Text(
+                text = if (isReviewMode) "Review" else "Over the board",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = { showNewGameDialog = true }) {
+                Icon(Icons.Rounded.AddCircleOutline, contentDescription = "New game")
+            }
+            IconButton(onClick = { showSettingsSheet = true }) {
+                Icon(Icons.Rounded.Settings, contentDescription = "Engine settings")
+            }
+        }
+
+        // ── Last move hint (fixed height to avoid layout shift) ─────────────
             val lastMoveText = remember(state.moves) {
                 val moves = state.moves
                 if (moves.isEmpty()) return@remember ""
@@ -167,8 +152,7 @@ fun GameScreen(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
             }
-        }
-    }
+        }  // end outer Column
 
     // ── Pawn promotion picker ─────────────────────────────────────────────────
     if (promotionPending != null) {

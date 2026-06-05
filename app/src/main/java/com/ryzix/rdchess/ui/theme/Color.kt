@@ -2,20 +2,20 @@ package com.ryzix.rdchess.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Background = Color(0xFF1A1209)
-val Surface = Color(0xFF2A2015)
-val SurfaceVariant = Color(0xFF332B1A)
-val SurfaceContainer = Color(0xFF3D3320)
-val SurfaceContainerHigh = Color(0xFF473D28)
+val Background = Color(0xFF0D0D0D)
+val Surface = Color(0xFF181818)
+val SurfaceVariant = Color(0xFF1E1E1E)
+val SurfaceContainer = Color(0xFF272727)
+val SurfaceContainerHigh = Color(0xFF333333)
 
-val Primary = Color(0xFFCF9B62)
-val PrimaryContainer = Color(0xFF4A3520)
-val OnPrimary = Color(0xFF1A1209)
+val Primary = Color(0xFFFF2541)
+val PrimaryContainer = Color(0xFF1E0A0B)
+val OnPrimary = Color(0xFFFFFFFF)
 
-val Secondary = Color(0xFFB8A080)
-val Outline = Color(0xFF6B5E45)
-val OnSurface = Color(0xFFEDE0CC)
-val OnSurfaceVariant = Color(0xFFBFB09A)
+val Secondary = Color(0xFF888888)
+val Outline = Color(0xFF3C3C3C)
+val OnSurface = Color(0xFFFFFFFF)
+val OnSurfaceVariant = Color(0xFFAAAAAA)
 
 // Board — Lichess classic green (desaturated, easy on the eyes)
 val BoardLightGreen = Color(0xFFEEEED2)

@@ -1,5 +1,6 @@
 package com.ryzix.rdchess.ui.navigation
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
@@ -53,6 +54,7 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MainPagerScreen(onThemeSettings: () -> Unit) {
     val pagerState = rememberPagerState(pageCount = { 4 })

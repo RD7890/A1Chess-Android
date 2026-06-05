@@ -1,8 +1,12 @@
 package com.ryzix.rdchess.ui.screens.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.layout.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -51,7 +55,7 @@ fun StockfishPanel(
     // Default to expanded so analysis is immediately visible
     var expanded by remember { mutableStateOf(true) }
 
-    Column(modifier = modifier) {
+    Column(modifier = modifier.animateContentSize(animationSpec = tween(220))) {
 
         // ── Stockfish strip ──────────────────────────────────────────────────
         Surface(
@@ -148,8 +152,8 @@ fun StockfishPanel(
         // ── Expanded analysis area ────────────────────────────────────────────
         AnimatedVisibility(
             visible = expanded && engineEnabled && engineAvailable,
-            enter = expandVertically(),
-            exit = shrinkVertically(),
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(180)),
         ) {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant,
@@ -193,8 +197,8 @@ fun StockfishPanel(
         // ── Move list ─────────────────────────────────────────────────────────
         AnimatedVisibility(
             visible = showMoveList,
-            enter = expandVertically(),
-            exit = shrinkVertically(),
+            enter = fadeIn(tween(180)) + expandVertically(tween(220)),
+            exit = fadeOut(tween(120)) + shrinkVertically(tween(220)),
         ) {
             MoveListRow(moves = moves, modifier = Modifier.fillMaxWidth())
         }

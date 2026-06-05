@@ -6,10 +6,10 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.github.bhlangonijr.chesslib.Piece
 import com.ryzix.rdchess.chess.*
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -26,6 +26,7 @@ object PrefKeys {
     val THREADS       = intPreferencesKey("threads")
     val PLAY_AS_WHITE = intPreferencesKey("play_as_white")
     val SHOW_ARROWS   = intPreferencesKey("show_arrows")
+    val GAME_HISTORY  = stringPreferencesKey("game_history")
 }
 
 data class AppPrefs(
@@ -55,10 +56,33 @@ data class MoveGradeResult(
     val cpLoss: Float,
 )
 
+// ── Saved game record ─────────────────────────────────────────────────────────
+
+data class SavedGame(
+    val result: String,
+    val moveCount: Int,
+    val timestamp: Long,
+    val startTimeSecs: Int,
+) {
+    fun toRecord() = "$result|$moveCount|$timestamp|$startTimeSecs"
+
+    companion object {
+        fun fromRecord(s: String): SavedGame? {
+            val p = s.split("|")
+            if (p.size < 4) return null
+            return SavedGame(
+                result        = p[0],
+                moveCount     = p[1].toIntOrNull() ?: 0,
+                timestamp     = p[2].toLongOrNull() ?: 0L,
+                startTimeSecs = p[3].toIntOrNull() ?: 300,
+            )
+        }
+    }
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/** 5 minutes per player by default */
-private const val DEFAULT_TIME_SECS = 5 * 60
+const val DEFAULT_TIME_SECS = 5 * 60
 
 class GameViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -89,6 +113,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val _prefs = MutableStateFlow(AppPrefs())
     val prefs: StateFlow<AppPrefs> = _prefs
 
+    // ── Pawn promotion pending ────────────────────────────────────────────────
+    /** Non-null while waiting for the user to pick a promotion piece. */
+    private val _promotionPending = MutableStateFlow<Pair<String, String>?>(null)
+    val promotionPending: StateFlow<Pair<String, String>?> = _promotionPending
+
     // ── Timer ────────────────────────────────────────────────────────────────
     private val _whiteTimeSecs = MutableStateFlow(DEFAULT_TIME_SECS)
     val whiteTimeSecs: StateFlow<Int> = _whiteTimeSecs
@@ -103,10 +132,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     val isTimerRunning: StateFlow<Boolean> = _isTimerRunning
 
     private var timerJob: Job? = null
+    private var currentStartTimeSecs = DEFAULT_TIME_SECS
 
     // ── OTB mode (pass-and-play, engine only analyses) ───────────────────────
     private val _isOtbMode = MutableStateFlow(true)
     val isOtbMode: StateFlow<Boolean> = _isOtbMode
+
+    // ── Game history ──────────────────────────────────────────────────────────
+    private val _gameHistory = MutableStateFlow<List<SavedGame>>(emptyList())
+    val gameHistory: StateFlow<List<SavedGame>> = _gameHistory
 
     // ── Move grade tracking ───────────────────────────────────────────────────
     @Volatile private var isGradingPending = false
@@ -123,13 +157,19 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             getApplication<Application>().dataStore.data.collect { data ->
                 _prefs.value = AppPrefs(
-                    levelIndex    = data[PrefKeys.LEVEL] ?: 3,
-                    searchTimeMs  = data[PrefKeys.SEARCH_TIME] ?: 1000,
-                    multiPv       = data[PrefKeys.MULTI_PV] ?: 3,
-                    threads       = data[PrefKeys.THREADS] ?: 1,
-                    playAsWhite   = (data[PrefKeys.PLAY_AS_WHITE] ?: 1) == 1,
-                    showArrows    = (data[PrefKeys.SHOW_ARROWS] ?: 1) == 1,
+                    levelIndex   = data[PrefKeys.LEVEL] ?: 3,
+                    searchTimeMs = data[PrefKeys.SEARCH_TIME] ?: 1000,
+                    multiPv      = data[PrefKeys.MULTI_PV] ?: 3,
+                    threads      = data[PrefKeys.THREADS] ?: 1,
+                    playAsWhite  = (data[PrefKeys.PLAY_AS_WHITE] ?: 1) == 1,
+                    showArrows   = (data[PrefKeys.SHOW_ARROWS] ?: 1) == 1,
                 )
+                // Parse saved game history
+                val raw = data[PrefKeys.GAME_HISTORY] ?: ""
+                _gameHistory.value = raw
+                    .split("\n")
+                    .filter { it.isNotBlank() }
+                    .mapNotNull { SavedGame.fromRecord(it) }
             }
         }
     }
@@ -141,7 +181,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             if (engineReady) {
                 val settings = STOCKFISH_LEVELS.getOrElse(_prefs.value.levelIndex) { STOCKFISH_LEVELS[3] }
                 engine.applySettings(settings)
-                // Kick off initial analysis so panel shows lines immediately
                 delay(300)
                 runAnalysis()
             }
@@ -149,41 +188,43 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun collectEngineOutput() {
-        // bestmove
+        // bestmove — marks end of thinking
         viewModelScope.launch {
             engine.bestMoveFlow.collect { bestMove ->
                 _isEngineThinking.value = false
-                val state = gameState.value
 
-                // Grade the move that was just played (OTB mode)
+                // Grade the move just played (OTB mode)
                 if (_isOtbMode.value && isGradingPending && _analysisLines.value.isNotEmpty()) {
                     isGradingPending = false
                     val postEval = _analysisLines.value.firstOrNull()?.eval ?: _engineEval.value
                     gradeLastMove(postEval)
                 }
 
-                // vs-Computer mode: engine makes its move
-                if (!_isOtbMode.value && !state.isGameOver && !state.isWhiteTurn) {
+                // vs-Computer mode: engine makes its reply
+                if (!_isOtbMode.value && !gameState.value.isGameOver && !gameState.value.isWhiteTurn) {
                     val from = bestMove.substring(0, 2)
                     val to   = bestMove.substring(2, 4)
+                    val promo = if (bestMove.length >= 5) bestMove[4] else 'q'
                     delay(300)
-                    chessGame.tryMove(from, to)
+                    chessGame.tryMove(from, to, promo)
                     runAnalysis()
                 }
             }
         }
-        // eval
+
+        // eval — update value only, do NOT toggle isThinking (prevents recomposition storm)
         viewModelScope.launch {
             engine.evalFlow.collect { eval ->
                 _engineEval.value = eval
-                _isEngineThinking.value = true
+                // isThinking is set TRUE in runAnalysis/triggerEngineMove and
+                // FALSE only when bestmove arrives. Do not set it here.
             }
         }
-        // analysis lines
+
+        // analysis lines → update UI + arrows
         viewModelScope.launch {
             engine.analysisFlow.collect { lines ->
                 _analysisLines.value = lines
-                // Update arrows from top moves
                 if (_engineEnabled.value && _prefs.value.showArrows) {
                     updateArrows(lines)
                 }
@@ -193,38 +234,24 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Move grading ──────────────────────────────────────────────────────────
 
-    /**
-     * Grade the last played move by comparing pre-move eval vs post-move eval.
-     *
-     * In UCI, eval is always from the side-to-move's perspective.
-     * Pre-move eval: side A to move. Post-move eval: side B to move (opponent).
-     *
-     * cpLoss = preMoveEval + postMoveEval
-     *   → If side A played best: postEval ≈ -preMoveEval, so sum ≈ 0
-     *   → If side A blundered:   postEval >> 0 (opponent now winning), sum >> 0
-     */
     private fun gradeLastMove(postEval: Float) {
         val cpLoss = preMoveEval + postEval
         val preBestUci = preMoveLines.firstOrNull()?.move ?: ""
         val lastMove = gameState.value.moves.lastOrNull()
         val playedUci = if (lastMove != null) "${lastMove.from}${lastMove.to}" else ""
-
         val isBestMove = playedUci.take(4) == preBestUci.take(4)
 
         val grade = when {
-            cpLoss <= 0.05f && isBestMove  -> MoveGrade.BEST
-            cpLoss <= 0.05f               -> MoveGrade.BRILLIANT
-            cpLoss <= 0.30f               -> MoveGrade.GOOD
-            cpLoss <= 0.75f               -> MoveGrade.INACCURACY
-            cpLoss <= 1.50f               -> MoveGrade.MISTAKE
-            else                          -> MoveGrade.BLUNDER
+            cpLoss <= 0.05f && isBestMove -> MoveGrade.BEST
+            cpLoss <= 0.05f              -> MoveGrade.BRILLIANT
+            cpLoss <= 0.30f              -> MoveGrade.GOOD
+            cpLoss <= 0.75f              -> MoveGrade.INACCURACY
+            cpLoss <= 1.50f              -> MoveGrade.MISTAKE
+            else                         -> MoveGrade.BLUNDER
         }
 
         _lastMoveGrade.value = MoveGradeResult(
-            grade = grade,
-            playedUci = playedUci,
-            bestUci = preBestUci,
-            cpLoss = cpLoss,
+            grade = grade, playedUci = playedUci, bestUci = preBestUci, cpLoss = cpLoss,
         )
     }
 
@@ -232,9 +259,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun updateArrows(lines: List<AnalysisLine>) {
         val arrows = lines.take(3).mapIndexedNotNull { idx, line ->
-            val from = line.move.getOrNull(0)?.toString()?.plus(line.move.getOrNull(1)?.toString() ?: "") ?: return@mapIndexedNotNull null
-            val to   = line.move.getOrNull(2)?.toString()?.plus(line.move.getOrNull(3)?.toString() ?: "") ?: return@mapIndexedNotNull null
-            if (from.length < 2 || to.length < 2) return@mapIndexedNotNull null
+            val from = line.move.take(2).takeIf { it.length == 2 } ?: return@mapIndexedNotNull null
+            val to   = line.move.drop(2).take(2).takeIf { it.length == 2 } ?: return@mapIndexedNotNull null
             Arrow(from, to, when (idx) {
                 0 -> ArrowColor.GREEN
                 1 -> ArrowColor.YELLOW
@@ -244,7 +270,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         chessGame.setArrows(arrows)
     }
 
-    /** Run Stockfish analysis on the current position (no best-move action). */
+    /** Run Stockfish analysis on the current position (analysis only, no move). */
     private fun runAnalysis() {
         if (!engineReady || !_engineEnabled.value) return
         val settings = STOCKFISH_LEVELS.getOrElse(_prefs.value.levelIndex) { STOCKFISH_LEVELS[3] }
@@ -266,20 +292,29 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val prevSelected = state.selectedSquare
 
         if (prevSelected != null && state.legalMoves.contains(square)) {
+            // Check for pawn promotion before executing the move
+            if (chessGame.isPromotionMove(prevSelected, square)) {
+                _promotionPending.value = Pair(prevSelected, square)
+                // Keep the square selected visually by clearing selection
+                chessGame.selectSquare(prevSelected) // re-select to show legal moves still
+                return
+            }
+
             val moved = chessGame.tryMove(prevSelected, square)
             if (moved) {
                 if (!_isTimerRunning.value) startTimer()
                 chessGame.clearArrows()
 
                 if (_isOtbMode.value) {
-                    // Capture pre-move state for grading
                     isGradingPending = engineReady && _engineEnabled.value
                     preMoveEval = _engineEval.value
                     preMoveLines = _analysisLines.value
-
-                    _lastMoveGrade.value = null   // clear old grade immediately
+                    _lastMoveGrade.value = null
                     _analysisLines.value = emptyList()
                     runAnalysis()
+
+                    // Auto-save if game ended
+                    if (gameState.value.isGameOver) saveCurrentGame()
                 } else {
                     triggerEngineMove()
                 }
@@ -287,6 +322,34 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         chessGame.selectSquare(square)
+    }
+
+    /** Called from UI after the user picks a promotion piece ('q','r','b','n'). */
+    fun confirmPromotion(promoChar: Char) {
+        val pending = _promotionPending.value ?: return
+        _promotionPending.value = null
+
+        val moved = chessGame.tryMove(pending.first, pending.second, promoChar)
+        if (moved) {
+            if (!_isTimerRunning.value) startTimer()
+            chessGame.clearArrows()
+
+            if (_isOtbMode.value) {
+                isGradingPending = engineReady && _engineEnabled.value
+                preMoveEval = _engineEval.value
+                preMoveLines = _analysisLines.value
+                _lastMoveGrade.value = null
+                _analysisLines.value = emptyList()
+                runAnalysis()
+                if (gameState.value.isGameOver) saveCurrentGame()
+            } else {
+                triggerEngineMove()
+            }
+        }
+    }
+
+    fun cancelPromotion() {
+        _promotionPending.value = null
     }
 
     fun triggerEngineMove() {
@@ -337,17 +400,23 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Game control ───────────────────────────────────────────────────────────
 
-    fun newGame(playAsWhite: Boolean = true, otbMode: Boolean = true) {
+    fun newGame(
+        playAsWhite: Boolean = true,
+        otbMode: Boolean = true,
+        timeSecs: Int = DEFAULT_TIME_SECS,
+    ) {
         timerJob?.cancel()
         engine.stop()
         _isEngineThinking.value = false
         _engineEval.value = 0f
         _analysisLines.value = emptyList()
         _lastMoveGrade.value = null
+        _promotionPending.value = null
         isGradingPending = false
         _isOtbMode.value = otbMode
-        _whiteTimeSecs.value = DEFAULT_TIME_SECS
-        _blackTimeSecs.value = DEFAULT_TIME_SECS
+        currentStartTimeSecs = timeSecs
+        _whiteTimeSecs.value = timeSecs
+        _blackTimeSecs.value = timeSecs
         _isTimerRunning.value = false
         _isTimerPaused.value = false
         chessGame.reset()
@@ -393,33 +462,73 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun flipBoard() { chessGame.flipBoard() }
 
+    // ── Game history ───────────────────────────────────────────────────────────
+
+    private fun saveCurrentGame() {
+        val state = gameState.value
+        val result = state.gameResult ?: return
+        val game = SavedGame(
+            result        = result,
+            moveCount     = state.moves.size,
+            timestamp     = System.currentTimeMillis(),
+            startTimeSecs = currentStartTimeSecs,
+        )
+        viewModelScope.launch {
+            val current = _gameHistory.value.toMutableList()
+            current.add(0, game)                     // newest first
+            val kept = current.take(50)              // cap at 50 entries
+            _gameHistory.value = kept
+            val encoded = kept.joinToString("\n") { it.toRecord() }
+            getApplication<Application>().dataStore.edit { it[PrefKeys.GAME_HISTORY] = encoded }
+        }
+    }
+
+    fun clearHistory() {
+        viewModelScope.launch {
+            _gameHistory.value = emptyList()
+            getApplication<Application>().dataStore.edit { it[PrefKeys.GAME_HISTORY] = "" }
+        }
+    }
+
     // ── Pref saves ─────────────────────────────────────────────────────────────
 
     fun saveLevel(levelIndex: Int) {
+        val settings = STOCKFISH_LEVELS.getOrElse(levelIndex) { STOCKFISH_LEVELS[3] }
+        // Update in-memory prefs immediately so runAnalysis picks up new level right away
+        _prefs.value = _prefs.value.copy(
+            levelIndex   = levelIndex,
+            searchTimeMs = settings.searchTimeMs,
+            multiPv      = settings.multiPv,
+            threads      = settings.threads,
+        )
         viewModelScope.launch {
             getApplication<Application>().dataStore.edit { prefs ->
-                prefs[PrefKeys.LEVEL] = levelIndex
-                val settings = STOCKFISH_LEVELS.getOrElse(levelIndex) { STOCKFISH_LEVELS[3] }
+                prefs[PrefKeys.LEVEL]       = levelIndex
                 prefs[PrefKeys.SEARCH_TIME] = settings.searchTimeMs
                 prefs[PrefKeys.MULTI_PV]    = settings.multiPv
                 prefs[PrefKeys.THREADS]     = settings.threads
             }
         }
+        // Re-run analysis with new level
+        if (_engineEnabled.value && engineReady) runAnalysis()
     }
 
     fun saveSearchTime(ms: Int) {
+        _prefs.value = _prefs.value.copy(searchTimeMs = ms)
         viewModelScope.launch {
             getApplication<Application>().dataStore.edit { it[PrefKeys.SEARCH_TIME] = ms }
         }
     }
 
     fun saveMultiPv(v: Int) {
+        _prefs.value = _prefs.value.copy(multiPv = v)
         viewModelScope.launch {
             getApplication<Application>().dataStore.edit { it[PrefKeys.MULTI_PV] = v }
         }
     }
 
     fun saveThreads(v: Int) {
+        _prefs.value = _prefs.value.copy(threads = v)
         viewModelScope.launch {
             getApplication<Application>().dataStore.edit { it[PrefKeys.THREADS] = v }
         }

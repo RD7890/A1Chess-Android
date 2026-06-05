@@ -42,12 +42,14 @@ data class GameState(
     val currentMoveIndex: Int = -1,
     val canGoBack: Boolean = false,
     val canGoForward: Boolean = false,
+    /** Square of the king currently in check (null if not in check). */
+    val checkedKingSquare: String? = null,
 )
 
 class ChessGame {
     private val board = Board()
     private val moveHistory = mutableListOf<ChessMove>()
-    private val redoStack = mutableListOf<Triple<String, String, String>>() // from, to, promo
+    private val redoStack = mutableListOf<Triple<String, String, Char>>() // from, to, promoChar
 
     private val _state = MutableStateFlow(GameState())
     val state: StateFlow<GameState> = _state
@@ -101,16 +103,40 @@ class ChessGame {
         return false
     }
 
-    fun tryMove(fromSq: String, toSq: String, promoOverride: String? = null): Boolean {
+    /**
+     * Returns true if moving [fromSq] → [toSq] is a pawn promotion
+     * (multiple legal moves exist because of piece choices).
+     */
+    fun isPromotionMove(fromSq: String, toSq: String): Boolean {
+        return try {
+            val from = Square.valueOf(fromSq.uppercase())
+            val to   = Square.valueOf(toSq.uppercase())
+            val piece = board.getPiece(from)
+            if (piece != Piece.WHITE_PAWN && piece != Piece.BLACK_PAWN) return false
+            val lm = board.legalMoves().filter { it.from == from && it.to == to }
+            lm.size > 1
+        } catch (e: Exception) { false }
+    }
+
+    /**
+     * Execute a move. [promoChar] selects the promotion piece when applicable:
+     *   'q'=Queen, 'r'=Rook, 'b'=Bishop, 'n'=Knight.
+     */
+    fun tryMove(fromSq: String, toSq: String, promoChar: Char = 'q'): Boolean {
         val from = Square.valueOf(fromSq.uppercase())
-        val to = Square.valueOf(toSq.uppercase())
+        val to   = Square.valueOf(toSq.uppercase())
 
         val legalMoves = board.legalMoves().filter { it.from == from && it.to == to }
         if (legalMoves.isEmpty()) return false
 
         val move = if (legalMoves.size > 1) {
-            legalMoves.firstOrNull { it.promotion == Piece.WHITE_QUEEN || it.promotion == Piece.BLACK_QUEEN }
-                ?: legalMoves.first()
+            val targetPiece = when (promoChar.lowercaseChar()) {
+                'r' -> if (board.sideToMove == Side.WHITE) Piece.WHITE_ROOK   else Piece.BLACK_ROOK
+                'b' -> if (board.sideToMove == Side.WHITE) Piece.WHITE_BISHOP else Piece.BLACK_BISHOP
+                'n' -> if (board.sideToMove == Side.WHITE) Piece.WHITE_KNIGHT else Piece.BLACK_KNIGHT
+                else -> if (board.sideToMove == Side.WHITE) Piece.WHITE_QUEEN else Piece.BLACK_QUEEN
+            }
+            legalMoves.firstOrNull { it.promotion == targetPiece } ?: legalMoves.first()
         } else legalMoves.first()
 
         val isCapture = board.getPiece(to) != Piece.NONE
@@ -124,9 +150,10 @@ class ChessGame {
             san = san,
             fen = board.fen,
             isCapture = isCapture,
+            promotion = move.promotion.takeIf { it != Piece.NONE }?.name,
         )
         moveHistory.add(chessMove)
-        redoStack.clear() // new move clears redo history
+        redoStack.clear()
         updateState()
         return true
     }
@@ -134,7 +161,7 @@ class ChessGame {
     fun navigateBack(): Boolean {
         if (moveHistory.isEmpty()) return false
         val last = moveHistory.removeLast()
-        redoStack.add(Triple(last.from, last.to, last.promotion ?: ""))
+        redoStack.add(Triple(last.from, last.to, last.promotion?.firstOrNull() ?: 'q'))
         board.undoMove()
         updateState()
         return true
@@ -142,20 +169,8 @@ class ChessGame {
 
     fun navigateForward(): Boolean {
         if (redoStack.isEmpty()) return false
-        val (from, to, _) = redoStack.removeLast()
-        val fromSq = Square.valueOf(from.uppercase())
-        val toSq = Square.valueOf(to.uppercase())
-        val legalMoves = board.legalMoves().filter { it.from == fromSq && it.to == toSq }
-        if (legalMoves.isEmpty()) return false
-        val move = legalMoves.firstOrNull {
-            it.promotion == Piece.WHITE_QUEEN || it.promotion == Piece.BLACK_QUEEN
-        } ?: legalMoves.first()
-        val isCapture = board.getPiece(toSq) != Piece.NONE
-        val san = getSan(move)
-        board.doMove(move)
-        moveHistory.add(ChessMove(from, to, san, board.fen, isCapture))
-        updateState()
-        return true
+        val (from, to, promo) = redoStack.removeLast()
+        return tryMove(from, to, promo)
     }
 
     fun undoMove(): Boolean {
@@ -222,12 +237,18 @@ class ChessGame {
     private fun updateState() {
         val isOver = board.isMated || board.isDraw || board.isStaleMate
         val result = when {
-            board.isMated -> if (board.sideToMove == Side.WHITE) "0-1" else "1-0"
-            board.isDraw -> "1/2-1/2"
+            board.isMated    -> if (board.sideToMove == Side.WHITE) "0-1" else "1-0"
+            board.isDraw     -> "1/2-1/2"
             board.isStaleMate -> "1/2-1/2"
-            else -> null
+            else             -> null
         }
         val lastMove = moveHistory.lastOrNull()?.let { it.from to it.to }
+
+        // Find the king square that's in check (includes checkmate)
+        val checkedKingSquare = if (board.isKingAttacked) {
+            findKingSquare(board.sideToMove)
+        } else null
+
         _state.value = _state.value.copy(
             fen = board.fen,
             moves = moveHistory.toList(),
@@ -240,7 +261,17 @@ class ChessGame {
             currentMoveIndex = moveHistory.size - 1,
             canGoBack = moveHistory.isNotEmpty(),
             canGoForward = redoStack.isNotEmpty(),
+            checkedKingSquare = checkedKingSquare,
         )
+    }
+
+    private fun findKingSquare(side: Side): String? {
+        val kingPiece = if (side == Side.WHITE) Piece.WHITE_KING else Piece.BLACK_KING
+        for (sq in Square.values()) {
+            if (sq == Square.NONE) continue
+            if (board.getPiece(sq) == kingPiece) return sq.value().lowercase()
+        }
+        return null
     }
 
     private fun getSan(move: Move): String {

@@ -6,7 +6,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -52,12 +51,12 @@ fun StockfishPanel(
     onToggleEngine: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // Default to expanded so analysis is immediately visible
     var expanded by remember { mutableStateOf(true) }
 
-    Column(modifier = modifier.animateContentSize(animationSpec = tween(220))) {
+    // No animateContentSize — it was causing excessive recompositions under rapid eval updates
+    Column(modifier = modifier) {
 
-        // ── Stockfish strip ──────────────────────────────────────────────────
+        // ── Stockfish strip ───────────────────────────────────────────────
         Surface(
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 4.dp,
@@ -79,19 +78,17 @@ fun StockfishPanel(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Stockfish",
+                    text = "Stockfish 16",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Spacer(modifier = Modifier.width(10.dp))
 
-                // Eval chip
                 if (engineEnabled && engineAvailable) {
                     EvalChip(eval = eval, isThinking = isThinking)
                     Spacer(modifier = Modifier.width(8.dp))
                 }
 
-                // Move grade badge
                 if (moveGrade != null && engineEnabled && engineAvailable) {
                     MoveGradeBadge(grade = moveGrade)
                     Spacer(modifier = Modifier.width(6.dp))
@@ -99,7 +96,6 @@ fun StockfishPanel(
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // Engine not available warning
                 if (!engineAvailable) {
                     Icon(
                         imageVector = Icons.Rounded.ErrorOutline,
@@ -110,7 +106,6 @@ fun StockfishPanel(
                     Spacer(modifier = Modifier.width(6.dp))
                 }
 
-                // On / Off toggle
                 Surface(
                     shape = RoundedCornerShape(6.dp),
                     color = when {
@@ -136,7 +131,6 @@ fun StockfishPanel(
                     )
                 }
 
-                // Expand chevron
                 if (engineEnabled && engineAvailable && (isThinking || analysisLines.isNotEmpty())) {
                     Spacer(modifier = Modifier.width(6.dp))
                     Icon(
@@ -149,12 +143,8 @@ fun StockfishPanel(
             }
         }
 
-        // ── Expanded analysis area ────────────────────────────────────────────
-        AnimatedVisibility(
-            visible = expanded && engineEnabled && engineAvailable,
-            enter = fadeIn(tween(180)),
-            exit = fadeOut(tween(180)),
-        ) {
+        // ── Analysis lines (only when expanded) ──────────────────────────
+        if (expanded && engineEnabled && engineAvailable) {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 tonalElevation = 2.dp,
@@ -166,7 +156,6 @@ fun StockfishPanel(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     if (isThinking && analysisLines.isEmpty()) {
-                        // "Thinking…" placeholder while engine has no lines yet
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -184,21 +173,23 @@ fun StockfishPanel(
                         }
                     }
                     analysisLines.forEach { line ->
-                        AnalysisLineRow(
-                            line = line,
-                            bestEval = analysisLines.firstOrNull()?.eval ?: line.eval,
-                            isThinking = isThinking,
-                        )
+                        key(line.rank) {
+                            AnalysisLineRow(
+                                line = line,
+                                bestEval = analysisLines.firstOrNull()?.eval ?: line.eval,
+                                isThinking = isThinking,
+                            )
+                        }
                     }
                 }
             }
         }
 
-        // ── Move list ─────────────────────────────────────────────────────────
+        // ── Move list ─────────────────────────────────────────────────────
         AnimatedVisibility(
             visible = showMoveList,
-            enter = fadeIn(tween(180)) + expandVertically(tween(220)),
-            exit = fadeOut(tween(120)) + shrinkVertically(tween(220)),
+            enter = fadeIn(tween(150)) + expandVertically(tween(180)),
+            exit  = fadeOut(tween(100)) + shrinkVertically(tween(180)),
         ) {
             MoveListRow(moves = moves, modifier = Modifier.fillMaxWidth())
         }
@@ -245,7 +236,7 @@ private fun EvalChip(eval: Float, isThinking: Boolean) {
         isThinking && eval == 0f -> "…"
         kotlin.math.abs(eval) >= 9.9f -> if (eval > 0) "M" else "-M"
         eval >= 0 -> "+%.1f".format(eval)
-        else -> "%.1f".format(eval)
+        else      -> "%.1f".format(eval)
     }
     Surface(
         shape = RoundedCornerShape(6.dp),
@@ -275,7 +266,6 @@ private fun AnalysisLineRow(line: AnalysisLine, bestEval: Float, isThinking: Boo
     } else {
         if (line.eval >= 0) "+%.1f".format(line.eval) else "%.1f".format(line.eval)
     }
-
     val contText = line.continuation.take(4).joinToString(" ") { uciToArrow(it) }
 
     Row(
@@ -311,7 +301,9 @@ private fun AnalysisLineRow(line: AnalysisLine, bestEval: Float, isThinking: Boo
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = "d${line.depth}",
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 9.sp),
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace, fontSize = 9.sp,
+                        ),
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
                     )
                 }
@@ -328,7 +320,6 @@ private fun AnalysisLineRow(line: AnalysisLine, bestEval: Float, isThinking: Boo
     }
 }
 
-/** Converts UCI move "e2e4" → "e2→e4" */
 private fun uciToArrow(uci: String): String {
     if (uci.length < 4) return uci
     return "${uci.substring(0, 2)}→${uci.substring(2, 4)}"

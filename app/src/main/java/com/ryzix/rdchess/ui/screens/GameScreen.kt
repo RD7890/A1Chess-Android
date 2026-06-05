@@ -1,7 +1,9 @@
 package com.ryzix.rdchess.ui.screens
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.*
@@ -20,6 +22,16 @@ import com.ryzix.rdchess.ui.screens.components.GameBottomBar
 import com.ryzix.rdchess.ui.screens.components.StockfishPanel
 import com.ryzix.rdchess.viewmodel.GameViewModel
 
+// Time-control options: label → seconds
+private val TIME_OPTIONS = listOf(
+    "1 min"  to 60,
+    "3 min"  to 180,
+    "5 min"  to 300,
+    "10 min" to 600,
+    "15 min" to 900,
+    "30 min" to 1800,
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GameScreen(
@@ -37,13 +49,14 @@ fun GameScreen(
     val whiteTimeSecs   by vm.whiteTimeSecs.collectAsState()
     val blackTimeSecs   by vm.blackTimeSecs.collectAsState()
     val isTimerPaused   by vm.isTimerPaused.collectAsState()
+    val promotionPending by vm.promotionPending.collectAsState()
 
     var showMoveList      by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showNewGameDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        vm.newGame(playAsWhite = true, otbMode = true)
+        vm.newGame(playAsWhite = true, otbMode = true, timeSecs = 300)
     }
 
     Scaffold(
@@ -66,9 +79,11 @@ fun GameScreen(
             )
         },
     ) { padding ->
+        // Scrollable column so analysis panel + move list are always reachable
         Column(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(padding),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -102,14 +117,14 @@ fun GameScreen(
                     .graphicsLayer { rotationZ = 180f },
             ) {
                 PlayerTimerRow(
-                    name      = "Black",
-                    timeSecs  = blackTimeSecs,
-                    isActive  = !state.isWhiteTurn && !state.isGameOver,
-                    isPaused  = isTimerPaused,
+                    name     = "Black",
+                    timeSecs = blackTimeSecs,
+                    isActive = !state.isWhiteTurn && !state.isGameOver,
+                    isPaused = isTimerPaused,
                 )
             }
 
-            // ── Chess board ───────────────────────────────────────────────
+            // ── Chess board (always square = full screen width) ───────────
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -157,72 +172,38 @@ fun GameScreen(
                 onToggleEngine  = { vm.toggleEngine() },
                 modifier        = Modifier.fillMaxWidth(),
             )
+
+            // Bottom padding so panel doesn't get cut by nav bar
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 
-    // ── Game-over dialog ──────────────────────────────────────────────────────
+    // ── Pawn promotion picker ─────────────────────────────────────────────────
+    if (promotionPending != null) {
+        PromotionDialog(
+            isWhite = state.isWhiteTurn,
+            onPick  = { vm.confirmPromotion(it) },
+            onDismiss = { vm.cancelPromotion() },
+        )
+    }
+
+    // ── Game-over overlay ─────────────────────────────────────────────────────
     if (state.isGameOver && state.gameResult != null) {
-        AlertDialog(
-            onDismissRequest = {},
-            title = {
-                Text(
-                    text = when (state.gameResult) {
-                        "1-0" -> "White wins!"
-                        "0-1" -> "Black wins!"
-                        else  -> "Draw!"
-                    },
-                    fontWeight = FontWeight.Bold,
-                )
-            },
-            text = {
-                Text(
-                    text = when (state.gameResult) {
-                        "1-0" -> "White has won the game."
-                        "0-1" -> "Black has won the game."
-                        else  -> "The game ended in a draw."
-                    }
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { showNewGameDialog = true }) { Text("New Game") }
-            },
-            dismissButton = {
-                TextButton(onClick = onBack) { Text("Back") }
-            },
+        GameOverDialog(
+            result = state.gameResult!!,
+            onNewGame = { showNewGameDialog = true },
+            onBack = onBack,
         )
     }
 
     // ── New game dialog ───────────────────────────────────────────────────────
     if (showNewGameDialog) {
-        AlertDialog(
-            onDismissRequest = { showNewGameDialog = false },
-            title = { Text("New Game", fontWeight = FontWeight.Bold) },
-            text = {
-                Column {
-                    Text("Choose time control:")
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = {
-                                showNewGameDialog = false
-                                vm.newGame(otbMode = true)
-                            },
-                            modifier = Modifier.weight(1f),
-                        ) { Text("5 min") }
-                        OutlinedButton(
-                            onClick = {
-                                showNewGameDialog = false
-                                vm.newGame(otbMode = true)
-                            },
-                            modifier = Modifier.weight(1f),
-                        ) { Text("10 min") }
-                    }
-                }
+        NewGameDialog(
+            onStart = { timeSecs ->
+                showNewGameDialog = false
+                vm.newGame(otbMode = true, timeSecs = timeSecs)
             },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { showNewGameDialog = false }) { Text("Cancel") }
-            },
+            onDismiss = { showNewGameDialog = false },
         )
     }
 
@@ -245,9 +226,152 @@ fun GameScreen(
     }
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-//  Player timer row
-// ────────────────────────────────────────────────────────────────────────────
+// ── Promotion picker dialog ────────────────────────────────────────────────────
+
+@Composable
+private fun PromotionDialog(
+    isWhite: Boolean,
+    onPick: (Char) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val pieces = listOf(
+        'q' to "Queen",
+        'r' to "Rook",
+        'b' to "Bishop",
+        'n' to "Knight",
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("Promote pawn", fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Choose a piece for ${if (isWhite) "White" else "Black"}:",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    pieces.forEach { (char, name) ->
+                        OutlinedButton(
+                            onClick = { onPick(char) },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(vertical = 12.dp, horizontal = 4.dp),
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = when (char) { 'q' -> "♛"; 'r' -> "♜"; 'b' -> "♝"; else -> "♞" },
+                                    fontSize = 22.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    text = name,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+// ── Game-over dialog ──────────────────────────────────────────────────────────
+
+@Composable
+private fun GameOverDialog(
+    result: String,
+    onNewGame: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val (title, subtitle) = when (result) {
+        "1-0"     -> "White Wins!" to "Checkmate — well played!"
+        "0-1"     -> "Black Wins!" to "Checkmate — well played!"
+        "1/2-1/2" -> "Draw!" to "The game ended in a draw."
+        else      -> "Game Over" to result
+    }
+
+    AlertDialog(
+        onDismissRequest = {},
+        title = { Text(title, fontWeight = FontWeight.Bold) },
+        text  = { Text(subtitle) },
+        confirmButton = {
+            Button(onClick = onNewGame) { Text("New Game") }
+        },
+        dismissButton = {
+            TextButton(onClick = onBack) { Text("Back") }
+        },
+    )
+}
+
+// ── New game dialog ───────────────────────────────────────────────────────────
+
+@Composable
+private fun NewGameDialog(
+    onStart: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var selectedTime by remember { mutableIntStateOf(300) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("New Game", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Choose time control:", style = MaterialTheme.typography.bodyMedium)
+                // 3-column grid of time chips
+                val chunked = TIME_OPTIONS.chunked(3)
+                chunked.forEach { row ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        row.forEach { (label, secs) ->
+                            val selected = selectedTime == secs
+                            OutlinedButton(
+                                onClick = { selectedTime = secs },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                ),
+                                contentPadding = PaddingValues(vertical = 8.dp),
+                            ) {
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = if (selected) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onStart(selectedTime) }) { Text("Start") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+// ── Player timer row ──────────────────────────────────────────────────────────
 
 @Composable
 private fun PlayerTimerRow(
@@ -302,9 +426,7 @@ private fun formatTime(totalSecs: Int): String {
     return "$m:${s.toString().padStart(2, '0')}"
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-//  Engine settings sheet (inline)
-// ────────────────────────────────────────────────────────────────────────────
+// ── Engine settings sheet ─────────────────────────────────────────────────────
 
 @Composable
 fun InlineEngineSettings(
@@ -315,6 +437,8 @@ fun InlineEngineSettings(
     onMultiPvChange: (Int) -> Unit,
     onThreadsChange: (Int) -> Unit,
 ) {
+    val levelLabels = listOf("800","1200","1400","1600","1800","2000","2200","2400","2600","2700","2800","Max")
+
     Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
         Text(
             text = "Engine settings",
@@ -324,17 +448,14 @@ fun InlineEngineSettings(
 
         EngineRow(
             label = "Engine",
-            value = if (engineAvailable) "Stockfish 16 (ARM64)" else "Not available — requires build",
+            value = if (engineAvailable) "Stockfish 16 (ARM64)" else "Not available",
         )
 
         if (!engineAvailable) {
             Spacer(modifier = Modifier.height(8.dp))
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.errorContainer,
-            ) {
+            Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.errorContainer) {
                 Text(
-                    text = "The Stockfish binary was not found in assets. Install the APK built by CI (GitHub Actions) which includes the compiled engine.",
+                    text = "Stockfish binary not found. Install the APK built by GitHub Actions CI which includes the compiled engine.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onErrorContainer,
                     modifier = Modifier.padding(12.dp),
@@ -345,12 +466,14 @@ fun InlineEngineSettings(
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
 
+        // Level slider — show ELO label
+        val levelLabel = levelLabels.getOrElse(prefs.levelIndex) { "${prefs.levelIndex + 1}" }
         SliderRow(
             label      = "Level",
             value      = (prefs.levelIndex + 1).toFloat(),
             valueRange = 1f..12f,
             steps      = 10,
-            display    = "${prefs.levelIndex + 1}",
+            display    = levelLabel,
             enabled    = engineAvailable,
             onValueChange = { onLevelChange(it.toInt() - 1) },
         )
@@ -390,9 +513,7 @@ fun InlineEngineSettings(
 @Composable
 private fun EngineRow(label: String, value: String) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -416,9 +537,7 @@ private fun SliderRow(
     onValueChange: (Float) -> Unit,
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -429,13 +548,13 @@ private fun SliderRow(
             else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
         )
         Slider(
-            value         = value,
+            value = value,
             onValueChange = onValueChange,
-            valueRange    = valueRange,
-            steps         = steps,
-            enabled       = enabled,
-            modifier      = Modifier.weight(1f),
-            colors        = SliderDefaults.colors(
+            valueRange = valueRange,
+            steps = steps,
+            enabled = enabled,
+            modifier = Modifier.weight(1f),
+            colors = SliderDefaults.colors(
                 thumbColor       = MaterialTheme.colorScheme.primary,
                 activeTrackColor = MaterialTheme.colorScheme.primary,
             ),
@@ -443,7 +562,7 @@ private fun SliderRow(
         Text(
             display,
             style    = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.width(40.dp),
+            modifier = Modifier.width(48.dp),
             color    = if (enabled) MaterialTheme.colorScheme.primary
             else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
         )

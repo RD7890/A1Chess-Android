@@ -1,13 +1,10 @@
 package com.ryzix.rdchess.ui.screens.components
 
-import android.graphics.Paint
-import android.graphics.PointF
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -49,15 +46,13 @@ fun ChessBoard(
     showCoordinates: Boolean = true,
 ) {
     val context = LocalContext.current
-    val svgCache = remember { mutableMapOf<String, SVG?>() }
+    val svgCache  = remember { mutableMapOf<String, SVG?>() }
     val bitmapCache = remember { mutableMapOf<String, ImageBitmap?>() }
 
-    fun getSvg(assetName: String): SVG? {
-        return svgCache.getOrPut(assetName) {
-            try {
-                context.assets.open("pieces/staunty/$assetName.svg").use { SVG.getFromInputStream(it) }
-            } catch (e: Exception) { null }
-        }
+    fun getSvg(assetName: String): SVG? = svgCache.getOrPut(assetName) {
+        try {
+            context.assets.open("pieces/staunty/$assetName.svg").use { SVG.getFromInputStream(it) }
+        } catch (e: Exception) { null }
     }
 
     fun getBitmap(piece: Piece, size: Int): ImageBitmap? {
@@ -65,7 +60,7 @@ fun ChessBoard(
         return bitmapCache.getOrPut(key) {
             val assetName = pieceAssetName(piece) ?: return@getOrPut null
             val svg = getSvg(assetName) ?: return@getOrPut null
-            svg.documentWidth = size.toFloat()
+            svg.documentWidth  = size.toFloat()
             svg.documentHeight = size.toFloat()
             val bmp = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
             val canvas = android.graphics.Canvas(bmp)
@@ -97,22 +92,37 @@ fun ChessBoard(
                 val sq = "$file$rank"
 
                 val isLastMoveFrom = state.lastMove?.first == sq
-                val isLastMoveTo = state.lastMove?.second == sq
-                val isSelected = state.selectedSquare == sq
-                val isLegal = state.legalMoves.contains(sq)
+                val isLastMoveTo   = state.lastMove?.second == sq
+                val isSelected     = state.selectedSquare == sq
+                val isLegal        = state.legalMoves.contains(sq)
+                val isCheckedKing  = sq == state.checkedKingSquare
 
+                // ── Square base colour ────────────────────────────────────────
                 val squareColor = when {
                     isSelected -> if (isLight) Color(0xFFf6f669) else Color(0xFFbaca2b)
-                    isLastMoveFrom || isLastMoveTo -> if (isLight) Color(0xFFf6f669).copy(alpha = 0.8f) else Color(0xFFbaca2b).copy(alpha = 0.8f)
+                    isLastMoveFrom || isLastMoveTo ->
+                        if (isLight) Color(0xFFf6f669).copy(alpha = 0.8f)
+                        else Color(0xFFbaca2b).copy(alpha = 0.8f)
                     isLight -> BoardLightGreen
-                    else -> BoardDarkGreen
+                    else    -> BoardDarkGreen
                 }
-
                 drawRect(color = squareColor, topLeft = Offset(x, y), size = Size(squareSize, squareSize))
 
+                // ── In-check / checkmate king overlay ─────────────────────────
+                if (isCheckedKing) {
+                    // Solid red glow for checkmate, lighter for regular check
+                    val alpha = if (state.isGameOver) 0.70f else 0.50f
+                    drawRect(
+                        color = Color(0xFFFF2020).copy(alpha = alpha),
+                        topLeft = Offset(x, y),
+                        size = Size(squareSize, squareSize),
+                    )
+                }
+
+                // ── Legal move dots / rings ───────────────────────────────────
                 if (isLegal) {
-                    val piece = state.fen.let { getPieceAtSquare(it, sq) }
-                    if (piece != null) {
+                    val hasPiece = getPieceAtSquare(state.fen, sq) != null
+                    if (hasPiece) {
                         drawCircle(
                             color = BoardMoveDotCapture.copy(alpha = 0.35f),
                             radius = squareSize / 2f - 2f,
@@ -128,6 +138,7 @@ fun ChessBoard(
                     }
                 }
 
+                // ── Coordinates ───────────────────────────────────────────────
                 if (showCoordinates) {
                     drawIntoCanvas { canvas ->
                         val paint = android.graphics.Paint().apply {
@@ -137,12 +148,9 @@ fun ChessBoard(
                             isAntiAlias = true
                         }
                         if (col == 0) {
-                            canvas.nativeCanvas.drawText(
-                                "$rank", x + 3f, y + squareSize * 0.22f, paint
-                            )
+                            canvas.nativeCanvas.drawText("$rank", x + 3f, y + squareSize * 0.22f, paint)
                         }
                         if (row == 7) {
-                            val fm = paint.fontMetrics
                             canvas.nativeCanvas.drawText(
                                 "$file",
                                 x + squareSize - paint.measureText("$file") - 3f,
@@ -155,22 +163,20 @@ fun ChessBoard(
             }
         }
 
-        // Draw pieces
-        state.let {
-            val piecesOnBoard = parseFenPieces(it.fen)
-            piecesOnBoard.forEach { (sq, piece) ->
-                val (col, row) = squareToColRow(sq, it.isFlipped)
-                val bmp = getBitmap(piece, sqInt)
-                if (bmp != null) {
-                    drawImage(
-                        image = bmp,
-                        topLeft = Offset(col * squareSize, row * squareSize),
-                    )
-                }
+        // ── Pieces ────────────────────────────────────────────────────────────
+        val piecesOnBoard = parseFenPieces(state.fen)
+        piecesOnBoard.forEach { (sq, piece) ->
+            val (col, row) = squareToColRow(sq, state.isFlipped)
+            val bmp = getBitmap(piece, sqInt)
+            if (bmp != null) {
+                drawImage(
+                    image = bmp,
+                    topLeft = Offset(col * squareSize, row * squareSize),
+                )
             }
         }
 
-        // Draw arrows
+        // ── Arrows ────────────────────────────────────────────────────────────
         state.arrows.forEach { arrow ->
             drawArrow(arrow, squareSize, state.isFlipped)
         }
@@ -179,27 +185,22 @@ fun ChessBoard(
 
 private fun DrawScope.drawArrow(arrow: Arrow, squareSize: Float, flipped: Boolean) {
     val (fromCol, fromRow) = squareToColRow(arrow.from, flipped)
-    val (toCol, toRow) = squareToColRow(arrow.to, flipped)
+    val (toCol,   toRow)   = squareToColRow(arrow.to,   flipped)
 
-    val fromCenter = Offset(
-        fromCol * squareSize + squareSize / 2,
-        fromRow * squareSize + squareSize / 2,
-    )
-    val toCenter = Offset(
-        toCol * squareSize + squareSize / 2,
-        toRow * squareSize + squareSize / 2,
-    )
+    val fromCenter = Offset(fromCol * squareSize + squareSize / 2, fromRow * squareSize + squareSize / 2)
+    val toCenter   = Offset(toCol   * squareSize + squareSize / 2, toRow   * squareSize + squareSize / 2)
 
     val color = when (arrow.color) {
-        ArrowColor.GREEN -> BoardArrowGreen
-        ArrowColor.BLUE -> Color(0xCC0066CC)
-        ArrowColor.RED -> Color(0xCCCC0000)
+        ArrowColor.GREEN  -> BoardArrowGreen
+        ArrowColor.BLUE   -> Color(0xCC0066CC)
+        ArrowColor.RED    -> Color(0xCCCC0000)
         ArrowColor.YELLOW -> Color(0xCCCCA000)
     }
 
     val dx = toCenter.x - fromCenter.x
     val dy = toCenter.y - fromCenter.y
     val len = kotlin.math.sqrt(dx * dx + dy * dy)
+    if (len < 1f) return
     val ux = dx / len
     val uy = dy / len
 
@@ -216,12 +217,11 @@ private fun DrawScope.drawArrow(arrow: Arrow, squareSize: Float, flipped: Boolea
 
     val perpX = -uy
     val perpY = ux
-    val tip = toCenter
     val base1 = Offset(shaftEnd.x + perpX * arrowHeadLen * 0.45f, shaftEnd.y + perpY * arrowHeadLen * 0.45f)
     val base2 = Offset(shaftEnd.x - perpX * arrowHeadLen * 0.45f, shaftEnd.y - perpY * arrowHeadLen * 0.45f)
 
     val path = Path().apply {
-        moveTo(tip.x, tip.y)
+        moveTo(toCenter.x, toCenter.y)
         lineTo(base1.x, base1.y)
         lineTo(base2.x, base2.y)
         close()
@@ -256,8 +256,8 @@ private fun parseFenPieces(fen: String): Map<String, Piece> {
             if (ch.isDigit()) {
                 fileIdx += ch.digitToInt()
             } else {
-                val file = 'a' + fileIdx
-                val sq = "$file$rank"
+                val file  = 'a' + fileIdx
+                val sq    = "$file$rank"
                 val piece = charToPiece(ch)
                 if (piece != Piece.NONE) result[sq] = piece
                 fileIdx++
@@ -268,22 +268,16 @@ private fun parseFenPieces(fen: String): Map<String, Piece> {
 }
 
 private fun getPieceAtSquare(fen: String, square: String): Piece? {
-    val pieces = parseFenPieces(fen)
-    return pieces[square]
+    val piece = parseFenPieces(fen)[square]
+    return if (piece == null || piece == Piece.NONE) null else piece
 }
 
 private fun charToPiece(c: Char): Piece = when (c) {
-    'K' -> Piece.WHITE_KING
-    'Q' -> Piece.WHITE_QUEEN
-    'R' -> Piece.WHITE_ROOK
-    'B' -> Piece.WHITE_BISHOP
-    'N' -> Piece.WHITE_KNIGHT
-    'P' -> Piece.WHITE_PAWN
-    'k' -> Piece.BLACK_KING
-    'q' -> Piece.BLACK_QUEEN
-    'r' -> Piece.BLACK_ROOK
-    'b' -> Piece.BLACK_BISHOP
-    'n' -> Piece.BLACK_KNIGHT
-    'p' -> Piece.BLACK_PAWN
+    'K' -> Piece.WHITE_KING;   'Q' -> Piece.WHITE_QUEEN
+    'R' -> Piece.WHITE_ROOK;   'B' -> Piece.WHITE_BISHOP
+    'N' -> Piece.WHITE_KNIGHT; 'P' -> Piece.WHITE_PAWN
+    'k' -> Piece.BLACK_KING;   'q' -> Piece.BLACK_QUEEN
+    'r' -> Piece.BLACK_ROOK;   'b' -> Piece.BLACK_BISHOP
+    'n' -> Piece.BLACK_KNIGHT; 'p' -> Piece.BLACK_PAWN
     else -> Piece.NONE
 }

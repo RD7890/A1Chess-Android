@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Settings
@@ -27,6 +28,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.ryzix.rdchess.ui.screens.GameHistoryScreen
 import com.ryzix.rdchess.ui.screens.GameScreen
 import com.ryzix.rdchess.ui.screens.HomeScreen
 import com.ryzix.rdchess.ui.screens.SettingsScreen
@@ -60,13 +62,12 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MainPagerScreen(onThemeSettings: () -> Unit) {
-    val pagerState = rememberPagerState(pageCount = { 3 })
+    val pagerState = rememberPagerState(pageCount = { 4 })
     val scope = rememberCoroutineScope()
 
-    val navBg = Color(0xFF181818)
-    val navBorder = Color(0xFF3C3C3C)
-    val primary = Color(0xFFFF2541)
-    val muted = Color(0xFF888888)
+    val navBg    = Color(0xFF181818)
+    val primary  = Color(0xFFFF2541)
+    val muted    = Color(0xFF888888)
     val indicator = Color(0xFF1E0A0B)
 
     Scaffold(
@@ -77,20 +78,21 @@ fun MainPagerScreen(onThemeSettings: () -> Unit) {
                 tonalElevation = 0.dp,
             ) {
                 val items = listOf(
-                    Triple("Home", Icons.Rounded.Home, 0),
-                    Triple("Play", Icons.Rounded.PlayArrow, 1),
-                    Triple("Settings", Icons.Rounded.Settings, 2),
+                    Triple("Home",     Icons.Rounded.Home,      0),
+                    Triple("Play",     Icons.Rounded.PlayArrow, 1),
+                    Triple("History",  Icons.Rounded.History,   2),
+                    Triple("Settings", Icons.Rounded.Settings,  3),
                 )
                 items.forEach { (label, icon, idx) ->
                     NavigationBarItem(
                         selected = pagerState.currentPage == idx,
-                        onClick = { scope.launch { pagerState.animateScrollToPage(idx) } },
-                        icon = { Icon(icon, contentDescription = label) },
-                        label = { Text(label) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = primary,
-                            selectedTextColor = primary,
-                            indicatorColor = indicator,
+                        onClick  = { scope.launch { pagerState.animateScrollToPage(idx) } },
+                        icon     = { Icon(icon, contentDescription = label) },
+                        label    = { Text(label) },
+                        colors   = NavigationBarItemDefaults.colors(
+                            selectedIconColor   = primary,
+                            selectedTextColor   = primary,
+                            indicatorColor      = indicator,
                             unselectedIconColor = muted,
                             unselectedTextColor = muted,
                         ),
@@ -112,7 +114,8 @@ fun MainPagerScreen(onThemeSettings: () -> Unit) {
                 1 -> GameScreen(
                     onBack = { scope.launch { pagerState.animateScrollToPage(0) } },
                 )
-                2 -> SettingsScreen(
+                2 -> GameHistoryScreen()
+                3 -> SettingsScreen(
                     onBack = { scope.launch { pagerState.animateScrollToPage(0) } },
                     onThemeSettings = onThemeSettings,
                 )

@@ -263,13 +263,23 @@ private fun PlayerTimerRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        Text(
+            text = name,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium),
+            color = if (isActive) MaterialTheme.colorScheme.onSurface
+            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+        )
         Surface(
-            shape = RoundedCornerShape(7.dp),
+            shape = RoundedCornerShape(9.dp),
             color = when {
-                isActive && !isPaused -> Color.White
-                isActive && isPaused  -> Color(0xFFBBBBBB)
-                else                  -> Color(0xFF3A3A3A)
+                isActive && !isPaused -> Color(0xFFFF2541)
+                isActive && isPaused  -> Color(0xFFBB1E30)
+                else                  -> Color(0xFF1E1E1E)
             },
+            border = androidx.compose.foundation.BorderStroke(
+                1.5.dp,
+                if (isActive) Color(0xFFC01D30) else Color(0xFF3C3C3C),
+            ),
             tonalElevation = 0.dp,
         ) {
             Text(
@@ -277,21 +287,12 @@ private fun PlayerTimerRow(
                 style = MaterialTheme.typography.titleLarge.copy(
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 22.sp,
+                    fontSize = 20.sp,
                 ),
-                color = when {
-                    isActive -> Color.Black
-                    else     -> Color(0xFFAAAAAA)
-                },
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                color = if (isActive) Color.White else Color(0xFF666666),
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
             )
         }
-        Text(
-            text = name,
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium),
-            color = if (isActive) MaterialTheme.colorScheme.onSurface
-            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-        )
     }
 }
 

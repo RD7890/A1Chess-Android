@@ -1,7 +1,17 @@
 package com.ryzix.rdchess.ui.screens.components
 
-import androidx.compose.foundation.Canvas
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.scaleIn
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -18,6 +28,7 @@ import com.ryzix.rdchess.chess.Arrow
 import com.ryzix.rdchess.chess.ArrowColor
 import com.ryzix.rdchess.chess.GameState
 import com.ryzix.rdchess.ui.theme.*
+import com.ryzix.rdchess.viewmodel.MoveGradeResult
 
 private fun fileIndex(file: Char) = file - 'a'
 private fun rankIndex(rank: Char) = rank - '1'
@@ -42,12 +53,14 @@ private fun offsetToSquare(x: Float, y: Float, squareSize: Float, flipped: Boole
 fun ChessBoard(
     modifier: Modifier = Modifier,
     state: GameState,
+    lastMoveGrade: MoveGradeResult? = null,
     onSquareTap: (String) -> Unit,
     showCoordinates: Boolean = true,
 ) {
     val context = LocalContext.current
-    val svgCache  = remember { mutableMapOf<String, SVG?>() }
+    val svgCache    = remember { mutableMapOf<String, SVG?>() }
     val bitmapCache = remember { mutableMapOf<String, ImageBitmap?>() }
+    val iconCache   = remember { mutableMapOf<String, ImageBitmap?>() }
 
     fun getSvg(assetName: String): SVG? = svgCache.getOrPut(assetName) {
         try {
@@ -69,116 +82,166 @@ fun ChessBoard(
         }
     }
 
-    Canvas(
-        modifier = modifier.pointerInput(state.isFlipped) {
-            detectTapGestures { offset ->
-                val squareSize = size.width / 8f
-                val sq = offsetToSquare(offset.x, offset.y, squareSize, state.isFlipped)
-                onSquareTap(sq)
-            }
-        }
-    ) {
-        val squareSize = size.width / 8f
-        val sqInt = squareSize.toInt()
+    fun getGradeIcon(filename: String): ImageBitmap? = iconCache.getOrPut(filename) {
+        try {
+            val bmp = android.graphics.BitmapFactory.decodeStream(
+                context.assets.open("move_icons/$filename")
+            )
+            bmp?.asImageBitmap()
+        } catch (e: Exception) { null }
+    }
 
-        for (row in 0..7) {
-            for (col in 0..7) {
-                val isLight = (row + col) % 2 == 0
-                val x = col * squareSize
-                val y = row * squareSize
+    BoxWithConstraints(modifier = modifier) {
+        val squareSizeDp = maxWidth / 8
 
-                val file = if (state.isFlipped) ('h' - col) else ('a' + col)
-                val rank = if (state.isFlipped) ('1' + row) else ('8' - row)
-                val sq = "$file$rank"
-
-                val isLastMoveFrom = state.lastMove?.first == sq
-                val isLastMoveTo   = state.lastMove?.second == sq
-                val isSelected     = state.selectedSquare == sq
-                val isLegal        = state.legalMoves.contains(sq)
-                val isCheckedKing  = sq == state.checkedKingSquare
-
-                // ── Square base colour ────────────────────────────────────────
-                val squareColor = when {
-                    isSelected -> if (isLight) Color(0xFFf6f669) else Color(0xFFbaca2b)
-                    isLastMoveFrom || isLastMoveTo ->
-                        if (isLight) Color(0xFFf6f669).copy(alpha = 0.8f)
-                        else Color(0xFFbaca2b).copy(alpha = 0.8f)
-                    isLight -> BoardLightGreen
-                    else    -> BoardDarkGreen
-                }
-                drawRect(color = squareColor, topLeft = Offset(x, y), size = Size(squareSize, squareSize))
-
-                // ── In-check / checkmate king overlay ─────────────────────────
-                if (isCheckedKing) {
-                    // Solid red glow for checkmate, lighter for regular check
-                    val alpha = if (state.isGameOver) 0.70f else 0.50f
-                    drawRect(
-                        color = Color(0xFFFF2020).copy(alpha = alpha),
-                        topLeft = Offset(x, y),
-                        size = Size(squareSize, squareSize),
-                    )
-                }
-
-                // ── Legal move dots / rings ───────────────────────────────────
-                if (isLegal) {
-                    val hasPiece = getPieceAtSquare(state.fen, sq) != null
-                    if (hasPiece) {
-                        drawCircle(
-                            color = BoardMoveDotCapture.copy(alpha = 0.35f),
-                            radius = squareSize / 2f - 2f,
-                            center = Offset(x + squareSize / 2, y + squareSize / 2),
-                            style = Stroke(width = squareSize * 0.08f),
-                        )
-                    } else {
-                        drawCircle(
-                            color = BoardMoveDot,
-                            radius = squareSize * 0.16f,
-                            center = Offset(x + squareSize / 2, y + squareSize / 2),
-                        )
+        androidx.compose.foundation.Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(state.isFlipped) {
+                    detectTapGestures { offset ->
+                        val squareSize = size.width / 8f
+                        val sq = offsetToSquare(offset.x, offset.y, squareSize, state.isFlipped)
+                        onSquareTap(sq)
                     }
                 }
+        ) {
+            val squareSize = size.width / 8f
+            val sqInt = squareSize.toInt()
 
-                // ── Coordinates ───────────────────────────────────────────────
-                if (showCoordinates) {
-                    drawIntoCanvas { canvas ->
-                        val paint = android.graphics.Paint().apply {
-                            color = if (isLight) android.graphics.Color.argb(180, 90, 130, 50)
-                            else android.graphics.Color.argb(180, 190, 210, 150)
-                            textSize = squareSize * 0.18f
-                            isAntiAlias = true
-                        }
-                        if (col == 0) {
-                            canvas.nativeCanvas.drawText("$rank", x + 3f, y + squareSize * 0.22f, paint)
-                        }
-                        if (row == 7) {
-                            canvas.nativeCanvas.drawText(
-                                "$file",
-                                x + squareSize - paint.measureText("$file") - 3f,
-                                y + squareSize - 3f,
-                                paint,
+            for (row in 0..7) {
+                for (col in 0..7) {
+                    val isLight = (row + col) % 2 == 0
+                    val x = col * squareSize
+                    val y = row * squareSize
+
+                    val file = if (state.isFlipped) ('h' - col) else ('a' + col)
+                    val rank = if (state.isFlipped) ('1' + row) else ('8' - row)
+                    val sq = "$file$rank"
+
+                    val isLastMoveFrom = state.lastMove?.first == sq
+                    val isLastMoveTo   = state.lastMove?.second == sq
+                    val isSelected     = state.selectedSquare == sq
+                    val isLegal        = state.legalMoves.contains(sq)
+                    val isCheckedKing  = sq == state.checkedKingSquare
+
+                    val squareColor = when {
+                        isSelected -> if (isLight) Color(0xFFf6f669) else Color(0xFFbaca2b)
+                        isLastMoveFrom || isLastMoveTo ->
+                            if (isLight) Color(0xFFf6f669).copy(alpha = 0.8f)
+                            else Color(0xFFbaca2b).copy(alpha = 0.8f)
+                        isLight -> BoardLightGreen
+                        else    -> BoardDarkGreen
+                    }
+                    drawRect(color = squareColor, topLeft = Offset(x, y), size = Size(squareSize, squareSize))
+
+                    if (isCheckedKing) {
+                        val alpha = if (state.isGameOver) 0.70f else 0.50f
+                        drawRect(
+                            color = Color(0xFFFF2020).copy(alpha = alpha),
+                            topLeft = Offset(x, y),
+                            size = Size(squareSize, squareSize),
+                        )
+                    }
+
+                    if (isLegal) {
+                        val hasPiece = getPieceAtSquare(state.fen, sq) != null
+                        if (hasPiece) {
+                            drawCircle(
+                                color = BoardMoveDotCapture.copy(alpha = 0.35f),
+                                radius = squareSize / 2f - 2f,
+                                center = Offset(x + squareSize / 2, y + squareSize / 2),
+                                style = Stroke(width = squareSize * 0.08f),
+                            )
+                        } else {
+                            drawCircle(
+                                color = BoardMoveDot,
+                                radius = squareSize * 0.16f,
+                                center = Offset(x + squareSize / 2, y + squareSize / 2),
                             )
                         }
                     }
+
+                    if (showCoordinates) {
+                        drawIntoCanvas { canvas ->
+                            val paint = android.graphics.Paint().apply {
+                                color = if (isLight) android.graphics.Color.argb(180, 90, 130, 50)
+                                else android.graphics.Color.argb(180, 190, 210, 150)
+                                textSize = squareSize * 0.18f
+                                isAntiAlias = true
+                            }
+                            if (col == 0) {
+                                canvas.nativeCanvas.drawText("$rank", x + 3f, y + squareSize * 0.22f, paint)
+                            }
+                            if (row == 7) {
+                                canvas.nativeCanvas.drawText(
+                                    "$file",
+                                    x + squareSize - paint.measureText("$file") - 3f,
+                                    y + squareSize - 3f,
+                                    paint,
+                                )
+                            }
+                        }
+                    }
                 }
             }
-        }
 
-        // ── Pieces ────────────────────────────────────────────────────────────
-        val piecesOnBoard = parseFenPieces(state.fen)
-        piecesOnBoard.forEach { (sq, piece) ->
-            val (col, row) = squareToColRow(sq, state.isFlipped)
-            val bmp = getBitmap(piece, sqInt)
-            if (bmp != null) {
-                drawImage(
-                    image = bmp,
-                    topLeft = Offset(col * squareSize, row * squareSize),
-                )
+            val piecesOnBoard = parseFenPieces(state.fen)
+            piecesOnBoard.forEach { (sq, piece) ->
+                val (col, row) = squareToColRow(sq, state.isFlipped)
+                val bmp = getBitmap(piece, sqInt)
+                if (bmp != null) {
+                    drawImage(
+                        image = bmp,
+                        topLeft = Offset(col * squareSize, row * squareSize),
+                    )
+                }
+            }
+
+            state.arrows.forEach { arrow ->
+                drawArrow(arrow, squareSize, state.isFlipped)
             }
         }
 
-        // ── Arrows ────────────────────────────────────────────────────────────
-        state.arrows.forEach { arrow ->
-            drawArrow(arrow, squareSize, state.isFlipped)
+        // ── Move grade icon overlay ────────────────────────────────────────────
+        val toSquare = lastMoveGrade?.playedUci
+            ?.takeIf { it.length >= 4 }
+            ?.substring(2, 4)
+        val iconFile = lastMoveGrade?.grade?.iconFilename
+
+        if (toSquare != null && iconFile != null) {
+            val (col, row) = squareToColRow(toSquare, state.isFlipped)
+            val iconSize = squareSizeDp * 0.58f
+            // Top-right corner of the destination square, slightly overflowing
+            val xOff = squareSizeDp * (col + 1) - iconSize * 0.42f
+            val yOff = squareSizeDp * row - iconSize * 0.42f
+
+            key(lastMoveGrade.playedUci + lastMoveGrade.grade.name) {
+                var visible by remember { mutableStateOf(false) }
+                LaunchedEffect(Unit) { visible = true }
+
+                AnimatedVisibility(
+                    visible = visible,
+                    enter = scaleIn(
+                        initialScale = 0.35f,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                            stiffness = Spring.StiffnessMediumLow,
+                        )
+                    ) + fadeIn(animationSpec = tween(120)),
+                    modifier = Modifier
+                        .offset(x = xOff, y = yOff)
+                        .size(iconSize),
+                ) {
+                    val iconBitmap = remember(iconFile) { getGradeIcon(iconFile) }
+                    if (iconBitmap != null) {
+                        Image(
+                            bitmap = iconBitmap,
+                            contentDescription = lastMoveGrade.grade.label,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+            }
         }
     }
 }

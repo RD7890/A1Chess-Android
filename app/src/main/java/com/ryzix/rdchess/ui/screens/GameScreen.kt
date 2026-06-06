@@ -131,6 +131,7 @@ fun GameScreen(
             ChessBoard(
                 modifier        = Modifier.fillMaxSize(),
                 state           = state,
+                lastMoveGrade   = moveGrade,
                 onSquareTap     = { sq -> vm.onSquareTap(sq) },
                 showCoordinates = true,
             )

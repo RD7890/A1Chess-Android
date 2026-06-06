@@ -12,10 +12,16 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ryzix.rdchess.chess.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "a1chess_prefs")
 
@@ -64,9 +70,18 @@ data class SavedGame(
     val moveCount: Int,
     val timestamp: Long,
     val movesUci: String = "",
+    /** Move grades keyed by GameState.currentMoveIndex at the time each move was played. */
+    val grades: Map<Int, MoveGrade> = emptyMap(),
 ) {
-    /** Returns a pipe-delimited record. movesUci cannot contain pipes. */
-    fun toRecord() = "$result|$moveCount|$timestamp|$movesUci"
+    /**
+     * Returns a pipe-delimited record with 5 fields.
+     * Field 5 = grades encoded as "idx:GRADE_NAME;idx:GRADE_NAME;…"
+     * movesUci and grade names must not contain pipes.
+     */
+    fun toRecord(): String {
+        val gradesEncoded = grades.entries.joinToString(";") { "${it.key}:${it.value.name}" }
+        return "$result|$moveCount|$timestamp|$movesUci|$gradesEncoded"
+    }
 
     fun generatePgn(): String {
         if (movesUci.isBlank()) return "[Result \"$result\"]\n\n$result"
@@ -84,13 +99,25 @@ data class SavedGame(
 
     companion object {
         fun fromRecord(s: String): SavedGame? {
-            val p = s.split("|", limit = 4)
+            val p = s.split("|", limit = 5)
             if (p.size < 3) return null
+            val grades: Map<Int, MoveGrade> = if (p.size >= 5 && p[4].isNotBlank()) {
+                p[4].split(";").mapNotNull { entry ->
+                    val parts = entry.split(":")
+                    if (parts.size == 2) {
+                        val idx   = parts[0].toIntOrNull() ?: return@mapNotNull null
+                        val grade = runCatching { MoveGrade.valueOf(parts[1]) }.getOrNull()
+                            ?: return@mapNotNull null
+                        idx to grade
+                    } else null
+                }.toMap()
+            } else emptyMap()
             return SavedGame(
                 result    = p[0],
                 moveCount = p[1].toIntOrNull() ?: 0,
                 timestamp = p[2].toLongOrNull() ?: 0L,
                 movesUci  = if (p.size >= 4) p[3] else "",
+                grades    = grades,
             )
         }
     }
@@ -105,6 +132,19 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private val engine = StockfishEngine(application)
     private var engineReady = false
+
+    /** Manages engine binary discovery and Stockfish download. */
+    val engineManager = EngineManager(application)
+
+    private val _selectedEngineType = MutableStateFlow(EngineType.RYZIX)
+    val selectedEngineType: StateFlow<EngineType> = _selectedEngineType
+
+    private val _isStockfishAvailable = MutableStateFlow(false)
+    val isStockfishAvailable: StateFlow<Boolean> = _isStockfishAvailable
+
+    /** null = idle, 0-100 = download progress percent. */
+    private val _downloadProgress = MutableStateFlow<Int?>(null)
+    val downloadProgress: StateFlow<Int?> = _downloadProgress
 
     private val _engineEval = MutableStateFlow(0f)
     val engineEval: StateFlow<Float> = _engineEval
@@ -148,6 +188,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     @Volatile private var preMoveEval = 0f
     @Volatile private var preMoveLines: List<AnalysisLine> = emptyList()
 
+    /**
+     * Grades stored by move index so they survive back/forward navigation.
+     * Key = GameState.currentMoveIndex at the time the move was played.
+     */
+    private val moveGrades = mutableMapOf<Int, MoveGradeResult>()
+
     /** True only while the engine is computing its reply move (triggerEngineMove was called).
      *  Distinct from _isEngineThinking which also covers analysis. Used to block player taps
      *  only when it is genuinely the engine's turn to move, not during post-move analysis. */
@@ -156,10 +202,57 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /** Prevents multiple newGame resets when first composing the Play screen. */
     private var gameInitialized = false
 
+    // External storage dirs — created once on init, used for PGN file saving.
+    // These land in Android/data/<package>/files/games/ which is visible in file managers.
+    private val gamesDir: File? by lazy {
+        getApplication<Application>().getExternalFilesDir("games")?.also { it.mkdirs() }
+    }
+    private val backupsDir: File? by lazy {
+        getApplication<Application>().getExternalFilesDir("backups")?.also { it.mkdirs() }
+    }
+
     init {
+        // Detect available engines before starting
+        _isStockfishAvailable.value = engineManager.isStockfishAvailable()
+        // Default to Ryzix (bundled). Fall back to Stockfish if Ryzix binary is absent.
+        if (!engineManager.isRyzixAvailable() && engineManager.isStockfishAvailable()) {
+            _selectedEngineType.value = EngineType.STOCKFISH
+        }
         loadPrefs()
         initEngine()
         collectEngineOutput()
+        initAppFolders()
+    }
+
+    /** Create all app-specific external folders so they appear in file managers immediately. */
+    private fun initAppFolders() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<Application>()
+            // Android/data/<package>/files/games/  — PGN files
+            app.getExternalFilesDir("games")?.mkdirs()
+            // Android/data/<package>/files/backups/ — history backups
+            app.getExternalFilesDir("backups")?.mkdirs()
+            // Android/data/<package>/files/media/  — sounds, assets mirror
+            app.getExternalFilesDir("media")?.mkdirs()
+            // Android/obb/<package>/               — OBB slot (engine expansion)
+            app.obbDir?.mkdirs()
+            // Android/media/<package>/             — shared media slot
+            app.externalMediaDirs.firstOrNull()?.mkdirs()
+        }
+    }
+
+    /**
+     * Write a PGN file to Android/data/<package>/files/games/<timestamp>_<result>.pgn
+     * Runs on IO dispatcher. Silent on failure (external storage may be unavailable).
+     */
+    private suspend fun savePgnFile(game: SavedGame) = withContext(Dispatchers.IO) {
+        try {
+            val dir = gamesDir ?: return@withContext
+            val dateStr = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(game.timestamp))
+            val resultTag = game.result.replace("/", "-")
+            val file = File(dir, "${dateStr}_${resultTag}.pgn")
+            file.writeText(game.generatePgn())
+        } catch (_: Exception) { }
     }
 
     private fun loadPrefs() {
@@ -193,14 +286,45 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun initEngine() {
         viewModelScope.launch {
-            engineReady = engine.init()
+            val binary = engineManager.getBinaryFor(_selectedEngineType.value)
+            engineReady = engine.init(binary)
             _engineAvailable.value = engineReady
             if (engineReady) {
-                val settings = STOCKFISH_LEVELS.getOrElse(_prefs.value.levelIndex) { STOCKFISH_LEVELS[3] }
-                engine.applySettings(settings)
+                // Ryzix doesn't support MultiPV / Skill Level UCI options — only apply to Stockfish
+                if (_selectedEngineType.value == EngineType.STOCKFISH) {
+                    val settings = STOCKFISH_LEVELS.getOrElse(_prefs.value.levelIndex) { STOCKFISH_LEVELS[3] }
+                    engine.applySettings(settings)
+                }
                 delay(300)
                 runAnalysis()
             }
+        }
+    }
+
+    /** Switch the active engine. Downloads Stockfish first if it isn't available yet. */
+    fun selectEngine(type: EngineType) {
+        if (type == EngineType.STOCKFISH && !engineManager.isStockfishAvailable()) {
+            downloadStockfish()
+            return
+        }
+        if (_selectedEngineType.value == type) return
+        _selectedEngineType.value = type
+        engine.quit()
+        engineReady = false
+        _engineAvailable.value = false
+        _analysisLines.value = emptyList()
+        initEngine()
+    }
+
+    /** Download Stockfish in the background and switch to it on success. */
+    fun downloadStockfish() {
+        if (_downloadProgress.value != null) return   // already in progress
+        viewModelScope.launch {
+            _downloadProgress.value = 0
+            val success = engineManager.downloadStockfish { pct -> _downloadProgress.value = pct }
+            _downloadProgress.value = null
+            _isStockfishAvailable.value = engineManager.isStockfishAvailable()
+            if (success) selectEngine(EngineType.STOCKFISH)
         }
     }
 
@@ -216,8 +340,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     updateArrows(_analysisLines.value)
                 }
 
-                // Grade the move just played (OTB mode)
-                if (_isOtbMode.value && isGradingPending && _analysisLines.value.isNotEmpty()) {
+                // Grade the move just played (OTB mode, Stockfish only — Ryzix has no multipv)
+                if (_isOtbMode.value && isGradingPending && _analysisLines.value.isNotEmpty()
+                        && _selectedEngineType.value == EngineType.STOCKFISH) {
                     isGradingPending = false
                     val postEval = _analysisLines.value.firstOrNull()?.eval ?: _engineEval.value
                     gradeLastMove(postEval)
@@ -260,24 +385,45 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     // ── Move grading ──────────────────────────────────────────────────────────
 
     private fun gradeLastMove(postEval: Float) {
+        // Bug fix: if preMoveLines was empty when the move was made (engine hadn't finished
+        // yet), we have no reliable best-move reference — skip grading entirely rather than
+        // producing a meaningless result.
+        if (preMoveLines.isEmpty()) return
+
+        // cpLoss: Stockfish reports eval from the side-to-move's perspective.
+        // preMoveEval is from the mover's POV (+ve = good for mover).
+        // postEval is from the OPPONENT's POV after the move (+ve = good for opponent).
+        // So net gain for the mover = preMoveEval + postEval (postEval is negative when
+        // the opponent is losing, i.e. the mover is still winning).
+        // A positive cpLoss means the mover LOST ground; negative means they GAINED.
         val cpLoss = preMoveEval + postEval
+
         val preBestUci = preMoveLines.firstOrNull()?.move ?: ""
-        val lastMove = gameState.value.moves.lastOrNull()
-        val playedUci = if (lastMove != null) "${lastMove.from}${lastMove.to}" else ""
-        val isBestMove = playedUci.take(4) == preBestUci.take(4)
+        val lastMove   = gameState.value.moves.lastOrNull()
+        val playedUci  = if (lastMove != null) "${lastMove.from}${lastMove.to}" else ""
+
+        // Guard: if preBestUci is blank the comparison is meaningless.
+        val isBestMove = preBestUci.isNotBlank() &&
+                playedUci.take(4) == preBestUci.take(4)
 
         val grade = when {
-            cpLoss <= 0.05f && isBestMove -> MoveGrade.BEST
-            cpLoss <= 0.05f              -> MoveGrade.BRILLIANT
+            // Best: played the exact top engine move with negligible loss.
+            isBestMove && cpLoss <= 0.10f -> MoveGrade.BEST
+            // Good: any move that keeps the evaluation very close (includes near-best alts).
+            // Brilliant is NOT auto-assigned here — real brilliancies need sacrifice detection
+            // which requires deeper analysis; auto-assigning it on cpLoss alone was wrong.
             cpLoss <= 0.30f              -> MoveGrade.GOOD
             cpLoss <= 0.75f              -> MoveGrade.INACCURACY
             cpLoss <= 1.50f              -> MoveGrade.MISTAKE
             else                         -> MoveGrade.BLUNDER
         }
 
-        _lastMoveGrade.value = MoveGradeResult(
+        val result = MoveGradeResult(
             grade = grade, playedUci = playedUci, bestUci = preBestUci, cpLoss = cpLoss,
         )
+        // Store keyed by current move index so back/forward navigation can restore it
+        moveGrades[gameState.value.currentMoveIndex] = result
+        _lastMoveGrade.value = result
     }
 
     // ── Arrow drawing ──────────────────────────────────────────────────────────
@@ -427,9 +573,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _promotionPending.value = null
         _isReviewMode.value = false
         isGradingPending = false
+        moveGrades.clear()
         _isOtbMode.value = otbMode
         _playerIsWhite.value = playerIsWhite
         chessGame.reset()
+        chessGame.clearArrows()   // clear immediately — don't wait for engine to finish
 
         // Board orientation: flip when Black is at bottom.
         // In OTB mode playerIsWhite controls which side faces you (white=false → black at bottom).
@@ -458,16 +606,20 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun navigateBack() {
         engine.stop()
         _isEngineThinking.value = false
-        _lastMoveGrade.value = null
+        isGradingPending = false   // cancel stale grade — post-nav analysis is a different position
         chessGame.navigateBack()
         chessGame.clearArrows()
+        // Restore the stored grade for the move now at the current index
+        _lastMoveGrade.value = moveGrades[chessGame.state.value.currentMoveIndex]
         if (_engineEnabled.value) runAnalysis()
     }
 
     fun navigateForward() {
-        _lastMoveGrade.value = null
+        isGradingPending = false   // same reason as navigateBack
         chessGame.navigateForward()
         chessGame.clearArrows()
+        // Restore the stored grade for the move now at the current index
+        _lastMoveGrade.value = moveGrades[chessGame.state.value.currentMoveIndex]
         if (_engineEnabled.value) runAnalysis()
     }
 
@@ -475,10 +627,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (_isReviewMode.value) return
         engine.stop()
         _isEngineThinking.value = false
-        _lastMoveGrade.value = null
+        isGradingPending = false
+        val undoneIndex = chessGame.state.value.currentMoveIndex
         chessGame.undoMove()
         // In vs-computer mode, undo the engine's move too so player is back at their turn
         if (!_isOtbMode.value) chessGame.undoMove()
+        moveGrades.remove(undoneIndex)   // discard grade for the undone move
+        _lastMoveGrade.value = moveGrades[chessGame.state.value.currentMoveIndex]
         chessGame.clearArrows()
         persistCurrentGame()
         if (_engineEnabled.value) runAnalysis()
@@ -504,12 +659,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _promotionPending.value = null
         _isReviewMode.value = true
         _isOtbMode.value = true
+        isGradingPending = false
+        moveGrades.clear()
 
         if (game.movesUci.isNotBlank()) {
             chessGame.loadFromMoves(game.movesUci)
         } else {
             chessGame.reset()
         }
+        chessGame.clearArrows()
 
         viewModelScope.launch {
             delay(200)
@@ -528,6 +686,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             _promotionPending.value = null
             _isReviewMode.value = true
             _isOtbMode.value = true
+            isGradingPending = false
+            moveGrades.clear()
+            chessGame.clearArrows()
             viewModelScope.launch {
                 delay(200)
                 if (_engineEnabled.value) runAnalysis()
@@ -568,6 +729,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Save the current in-progress game to history with result = "*".
      * Replaces any previous "*" save so there is only ever one in-progress slot.
+     * Grades are included so they survive app restarts.
      */
     fun saveGameInProgress() {
         val movesUci = chessGame.getMovesAsUci()
@@ -578,14 +740,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             moveCount = state.moves.size,
             timestamp = System.currentTimeMillis(),
             movesUci  = movesUci,
+            grades    = moveGrades.mapValues { it.value.grade },
         )
         viewModelScope.launch {
             val current = _gameHistory.value.toMutableList()
             current.removeAll { it.result == "*" }   // keep only one in-progress slot
             current.add(0, game)
-            val kept = current.take(50)
-            _gameHistory.value = kept
-            val encoded = kept.joinToString("\n") { g -> g.toRecord() }
+            // No cap — every game is kept forever
+            _gameHistory.value = current
+            val encoded = current.joinToString("\n") { g -> g.toRecord() }
             getApplication<Application>().dataStore.edit { prefs ->
                 prefs[PrefKeys.GAME_HISTORY]       = encoded
                 prefs[PrefKeys.CURRENT_GAME_MOVES] = ""
@@ -604,13 +767,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _lastMoveGrade.value = null
         _promotionPending.value = null
         _isReviewMode.value = false
-        _isOtbMode.value = false
+        _isOtbMode.value = true   // resume as Pass & Play (both sides human), not vs AI
+        isGradingPending = false
+        moveGrades.clear()
 
         if (game.movesUci.isNotBlank()) {
             chessGame.loadFromMoves(game.movesUci)
         } else {
             chessGame.reset()
         }
+        chessGame.clearArrows()
 
         // Remove the in-progress entry from history — it's live again
         viewModelScope.launch {
@@ -639,17 +805,20 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             moveCount = state.moves.size,
             timestamp = System.currentTimeMillis(),
             movesUci  = movesUci,
+            grades    = moveGrades.mapValues { it.value.grade },
         )
         viewModelScope.launch {
             val current = _gameHistory.value.toMutableList()
             current.add(0, game)
-            val kept = current.take(50)
-            _gameHistory.value = kept
-            val encoded = kept.joinToString("\n") { g -> g.toRecord() }
+            // No cap — every completed game is kept forever
+            _gameHistory.value = current
+            val encoded = current.joinToString("\n") { g -> g.toRecord() }
             getApplication<Application>().dataStore.edit { prefs ->
                 prefs[PrefKeys.GAME_HISTORY] = encoded
                 prefs[PrefKeys.CURRENT_GAME_MOVES] = ""  // clear in-progress save
             }
+            // Also write a PGN file to Android/data/<package>/files/games/
+            savePgnFile(game)
         }
     }
 

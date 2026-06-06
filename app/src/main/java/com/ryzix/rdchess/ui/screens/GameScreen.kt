@@ -1,28 +1,33 @@
 package com.ryzix.rdchess.ui.screens
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddCircleOutline
 import androidx.compose.material.icons.rounded.Analytics
+import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
+import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.SmartToy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.ryzix.rdchess.chess.EngineType
 import com.ryzix.rdchess.ui.screens.components.ChessBoard
 import com.ryzix.rdchess.ui.screens.components.GameBottomBar
 import com.ryzix.rdchess.ui.screens.components.StockfishPanel
@@ -33,36 +38,65 @@ import com.ryzix.rdchess.viewmodel.GameViewModel
 fun GameScreen(
     onBack: () -> Unit,
     vm: GameViewModel = viewModel(),
-    isFullscreen: Boolean = false,
-    onToggleFullscreen: () -> Unit = {},
 ) {
-    val state            by vm.gameState.collectAsState()
-    val eval             by vm.engineEval.collectAsState()
-    val isThinking       by vm.isEngineThinking.collectAsState()
-    val engineEnabled    by vm.engineEnabled.collectAsState()
-    val engineAvailable  by vm.engineAvailable.collectAsState()
-    val analysisLines    by vm.analysisLines.collectAsState()
-    val moveGrade        by vm.lastMoveGrade.collectAsState()
-    val prefs            by vm.prefs.collectAsState()
-    val promotionPending by vm.promotionPending.collectAsState()
-    val isReviewMode     by vm.isReviewMode.collectAsState()
+    val state               by vm.gameState.collectAsState()
+    val eval                by vm.engineEval.collectAsState()
+    val isThinking          by vm.isEngineThinking.collectAsState()
+    val engineEnabled       by vm.engineEnabled.collectAsState()
+    val engineAvailable     by vm.engineAvailable.collectAsState()
+    val analysisLines       by vm.analysisLines.collectAsState()
+    val moveGrade           by vm.lastMoveGrade.collectAsState()
+    val prefs               by vm.prefs.collectAsState()
+    val promotionPending    by vm.promotionPending.collectAsState()
+    val isReviewMode        by vm.isReviewMode.collectAsState()
+    val selectedEngineType  by vm.selectedEngineType.collectAsState()
+    val downloadProgress    by vm.downloadProgress.collectAsState()
+    val stockfishAvailable  by vm.isStockfishAvailable.collectAsState()
 
-    var showMoveList      by remember { mutableStateOf(false) }
-    var showSettingsSheet by remember { mutableStateOf(false) }
-    var showNewGameDialog by remember { mutableStateOf(false) }
+    var isFullscreen       by remember { mutableStateOf(false) }
+    var showMoveList       by remember { mutableStateOf(false) }
+    var showSettingsSheet  by remember { mutableStateOf(false) }
+    var showNewGameDialog  by remember { mutableStateOf(false) }
+    var showSavePrompt     by remember { mutableStateOf(false) }
     // Shown when a game ends; user can close it and manually review moves with ← →
     var showGameOverDialog by remember { mutableStateOf(true) }
     LaunchedEffect(state.isGameOver) { if (state.isGameOver) showGameOverDialog = true }
 
+    // ── Back-press: prompt to save if a live game is in progress ─────────────
+    val activeGame = state.moves.isNotEmpty() && !state.isGameOver && !isReviewMode
+    BackHandler(enabled = activeGame) { showSavePrompt = true }
+
+    // ── Save prompt ────────────────────────────────────────────────────────────
+    if (showSavePrompt) {
+        AlertDialog(
+            onDismissRequest = { showSavePrompt = false },
+            title = { Text("Save game?", fontWeight = FontWeight.Bold) },
+            text  = {
+                Text(
+                    "Save this game so you can continue or analyse it later?",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                Button(onClick = { vm.saveGameInProgress(); showSavePrompt = false; onBack() }) {
+                    Text("Save & Leave")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { showSavePrompt = false; onBack() },
+                    colors  = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Discard") }
+            },
+        )
+    }
+
     // DO NOT call vm.newGame() here — game is restored from DataStore on ViewModel init,
     // and persists across tab switches since the ViewModel lives for the Activity lifetime.
 
-    // Outer scrollable Column — allows the whole play screen to scroll in floating/pip windows.
     // No Scaffold/TopAppBar so no WindowInsets status-bar padding is injected.
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState()),
+        modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         // ── Compact header row (zero window insets) ───────────────────────────
@@ -78,8 +112,8 @@ fun GameScreen(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
             )
-            // Fullscreen toggle — hides/shows the bottom nav bar
-            IconButton(onClick = onToggleFullscreen) {
+            // Fullscreen toggle
+            IconButton(onClick = { isFullscreen = !isFullscreen }) {
                 Icon(
                     imageVector = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
                     contentDescription = if (isFullscreen) "Exit fullscreen" else "Fullscreen",
@@ -91,6 +125,18 @@ fun GameScreen(
             IconButton(onClick = { showSettingsSheet = true }) {
                 Icon(Icons.Rounded.Settings, contentDescription = "Engine settings")
             }
+        }
+
+        // ── Engine selector chips ─────────────────────────────────────────────
+        if (!isFullscreen) {
+            EngineSelector(
+                selectedEngine     = selectedEngineType,
+                stockfishAvailable = stockfishAvailable,
+                downloadProgress   = downloadProgress,
+                onSelectRyzix      = { vm.selectEngine(EngineType.RYZIX) },
+                onSelectStockfish  = { vm.selectEngine(EngineType.STOCKFISH) },
+                modifier           = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            )
         }
 
         // ── Last move hint (fixed height to avoid layout shift) ─────────────
@@ -297,9 +343,10 @@ private fun GameOverDialog(
     AlertDialog(
         onDismissRequest = onAnalyse,
         title = { Text(title, fontWeight = FontWeight.Bold) },
-        text  = { Text(subtitle) },
-        confirmButton = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(subtitle)
+                Spacer(Modifier.height(4.dp))
                 Button(onClick = onNewGame, modifier = Modifier.fillMaxWidth()) {
                     Text("New Game")
                 }
@@ -327,11 +374,15 @@ private fun GameOverDialog(
                     Spacer(Modifier.width(6.dp))
                     Text("Export PGN")
                 }
+                TextButton(
+                    onClick = onClose,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Close")
+                }
             }
         },
-        dismissButton = {
-            TextButton(onClick = onClose) { Text("Close") }
-        },
+        confirmButton = {},
     )
 }
 
@@ -569,5 +620,97 @@ private fun SliderRow(
             color    = if (enabled) MaterialTheme.colorScheme.primary
             else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
         )
+    }
+}
+
+// ── Engine selector chip row ──────────────────────────────────────────────────
+@Composable
+private fun EngineSelector(
+    selectedEngine     : EngineType,
+    stockfishAvailable : Boolean,
+    downloadProgress   : Int?,
+    onSelectRyzix      : () -> Unit,
+    onSelectStockfish  : () -> Unit,
+    modifier           : Modifier = Modifier,
+) {
+    val primary   = Color(0xFFFF2541)
+    val primBg    = Color(0xFF1E0A0B)
+    val muted     = Color(0xFF666666)
+    val surfEdge  = Color(0xFF2A2A2A)
+
+    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // ── Ryzix chip ────────────────────────────────────────────────────────
+        val ryzixSelected = selectedEngine == EngineType.RYZIX
+        EngineSelectorChip(
+            label    = "Ryzix  ~1000",
+            selected = ryzixSelected,
+            icon     = Icons.Rounded.SmartToy,
+            onClick  = onSelectRyzix,
+            primary  = primary, primBg = primBg, muted = muted, surfEdge = surfEdge,
+        )
+
+        // ── Stockfish chip ────────────────────────────────────────────────────
+        val sfSelected = selectedEngine == EngineType.STOCKFISH
+        if (downloadProgress != null) {
+            // Downloading
+            Box(
+                modifier = Modifier
+                    .height(32.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(primBg)
+                    .border(1.dp, primary.copy(alpha = 0.4f), RoundedCornerShape(50))
+                    .padding(horizontal = 12.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    CircularProgressIndicator(
+                        progress = { downloadProgress / 100f },
+                        modifier = Modifier.size(14.dp),
+                        color    = primary,
+                        strokeWidth = 2.dp,
+                    )
+                    Text("$downloadProgress%", fontSize = 12.sp, color = primary, fontWeight = FontWeight.Medium)
+                }
+            }
+        } else {
+            EngineSelectorChip(
+                label    = if (stockfishAvailable) "Stockfish 16" else "Stockfish  ↓",
+                selected = sfSelected,
+                icon     = if (stockfishAvailable) Icons.Rounded.SmartToy else Icons.Rounded.CloudDownload,
+                onClick  = onSelectStockfish,
+                primary  = primary, primBg = primBg, muted = muted, surfEdge = surfEdge,
+            )
+        }
+    }
+}
+
+@Composable
+private fun EngineSelectorChip(
+    label    : String,
+    selected : Boolean,
+    icon     : androidx.compose.ui.graphics.vector.ImageVector,
+    onClick  : () -> Unit,
+    primary  : Color,
+    primBg   : Color,
+    muted    : Color,
+    surfEdge : Color,
+) {
+    val bg     = if (selected) primBg   else Color.Transparent
+    val border = if (selected) primary  else surfEdge
+    val text   = if (selected) primary  else muted
+    Box(
+        modifier = Modifier
+            .height(32.dp)
+            .clip(RoundedCornerShape(50))
+            .background(bg)
+            .border(1.dp, border, RoundedCornerShape(50))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            Icon(icon, null, modifier = Modifier.size(14.dp), tint = text)
+            Text(label, fontSize = 12.sp, color = text, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+        }
     }
 }

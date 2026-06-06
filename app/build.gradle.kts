@@ -19,11 +19,25 @@ android {
         applicationId = "com.ryzix.rdchess"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.2"
+        versionCode = 5
+        versionName = "1.3"
 
         ndk {
             abiFilters += setOf("arm64-v8a")
+        }
+
+        externalNativeBuild {
+            cmake {
+                arguments += listOf("-DANDROID_STL=c++_shared")
+                cppFlags  += listOf("-std=c++17")
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path    = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
         }
     }
 

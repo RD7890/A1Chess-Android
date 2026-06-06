@@ -81,28 +81,32 @@ class StockfishEngine(private val context: Context) {
     @Volatile private var stoppingForRestart = false
 
     /**
-     * Locate the Stockfish binary.
-     *
-     * Android's package installer extracts every .so from jniLibs/arm64-v8a/
-     * into nativeLibraryDir at install time — already executable, no manual copy needed.
-     * This avoids the AssetManager 2 MB decompression limit that breaks large assets.
+     * Locate the bundled binary from nativeLibraryDir (fallback).
+     * Preferred path: callers pass an explicit [File] to [init].
      */
     private fun findBinary(): File? {
         val nativeDir = context.applicationInfo.nativeLibraryDir
         val binary = File(nativeDir, LIB_NAME)
-        Log.d(TAG, "Looking for Stockfish at: ${binary.absolutePath}")
+        Log.d(TAG, "Looking for binary at: ${binary.absolutePath}")
         return if (binary.exists() && binary.length() > 0L) {
-            Log.d(TAG, "Found Stockfish: ${binary.length()} bytes")
+            Log.d(TAG, "Found binary: ${binary.length()} bytes")
             binary
         } else {
-            Log.e(TAG, "Stockfish binary NOT found at $nativeDir — APK may be missing jniLibs/arm64-v8a/$LIB_NAME")
+            Log.e(TAG, "Binary NOT found at $nativeDir/$LIB_NAME")
             null
         }
     }
 
-    fun init(): Boolean {
+    /**
+     * Starts the engine process.
+     *
+     * @param binaryFile  Explicit path to the UCI engine binary.
+     *                    When null, falls back to [findBinary] (looks for [LIB_NAME]
+     *                    in nativeLibraryDir — i.e. the bundled Stockfish).
+     */
+    fun init(binaryFile: File? = null): Boolean {
         return try {
-            val binary = findBinary() ?: return false
+            val binary = binaryFile ?: findBinary() ?: return false
             if (!binary.canExecute()) {
                 binary.setExecutable(true)
             }
@@ -111,13 +115,13 @@ class StockfishEngine(private val context: Context) {
             process = pb.start()
             writer = BufferedWriter(OutputStreamWriter(process!!.outputStream))
             reader = BufferedReader(InputStreamReader(process!!.inputStream))
-            Log.d(TAG, "Stockfish process started: ${binary.absolutePath}")
+            Log.d(TAG, "Engine process started: ${binary.absolutePath}")
             sendCommand("uci")
             startReadLoop()
             sendCommand("isready")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to init Stockfish: ${e.message}", e)
+            Log.e(TAG, "Failed to init engine: ${e.message}", e)
             false
         }
     }

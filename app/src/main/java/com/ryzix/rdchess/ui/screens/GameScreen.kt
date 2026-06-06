@@ -6,6 +6,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddCircleOutline
+import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -26,6 +28,8 @@ import com.ryzix.rdchess.viewmodel.GameViewModel
 fun GameScreen(
     onBack: () -> Unit,
     vm: GameViewModel = viewModel(),
+    isFullscreen: Boolean = false,
+    onToggleFullscreen: () -> Unit = {},
 ) {
     val state            by vm.gameState.collectAsState()
     val eval             by vm.engineEval.collectAsState()
@@ -45,10 +49,12 @@ fun GameScreen(
     // DO NOT call vm.newGame() here — game is restored from DataStore on ViewModel init,
     // and persists across tab switches since the ViewModel lives for the Activity lifetime.
 
-    // Plain Column — no Scaffold/TopAppBar so no WindowInsets status-bar padding is
-    // injected. This prevents the big top gap that appears in floating/pip windows.
+    // Outer scrollable Column — allows the whole play screen to scroll in floating/pip windows.
+    // No Scaffold/TopAppBar so no WindowInsets status-bar padding is injected.
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         // ── Compact header row (zero window insets) ───────────────────────────
@@ -64,6 +70,13 @@ fun GameScreen(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
             )
+            // Fullscreen toggle — hides/shows the bottom nav bar
+            IconButton(onClick = onToggleFullscreen) {
+                Icon(
+                    imageVector = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                    contentDescription = if (isFullscreen) "Exit fullscreen" else "Fullscreen",
+                )
+            }
             IconButton(onClick = { showNewGameDialog = true }) {
                 Icon(Icons.Rounded.AddCircleOutline, contentDescription = "New game")
             }
@@ -73,86 +86,80 @@ fun GameScreen(
         }
 
         // ── Last move hint (fixed height to avoid layout shift) ─────────────
-            val lastMoveText = remember(state.moves) {
-                val moves = state.moves
-                if (moves.isEmpty()) return@remember ""
-                val moveNum     = (moves.size + 1) / 2
-                val isWhiteMove = moves.size % 2 == 1
-                val san         = moves.lastOrNull()?.san ?: ""
-                if (isWhiteMove) "$moveNum. $san" else "$moveNum... $san"
-            }
-            // Always reserve exactly the same height so the board never shifts
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(18.dp)
-                    .padding(horizontal = 10.dp),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                if (lastMoveText.isNotEmpty()) {
-                    Text(
-                        text = lastMoveText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
-                    )
-                }
-            }
-
-            // ── Chess board — fills all available width with minimal side margin ──
-            BoxWithConstraints(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    // Very small horizontal padding so the board is visible even in a
-                    // small floating window, while still not touching screen edges.
-                    .padding(horizontal = 2.dp)
-                    .aspectRatio(1f),
-            ) {
-                ChessBoard(
-                    modifier        = Modifier.fillMaxSize(),
-                    state           = state,
-                    onSquareTap     = { sq -> vm.onSquareTap(sq) },
-                    showCoordinates = true,
+        val lastMoveText = remember(state.moves) {
+            val moves = state.moves
+            if (moves.isEmpty()) return@remember ""
+            val moveNum     = (moves.size + 1) / 2
+            val isWhiteMove = moves.size % 2 == 1
+            val san         = moves.lastOrNull()?.san ?: ""
+            if (isWhiteMove) "$moveNum. $san" else "$moveNum... $san"
+        }
+        // Always reserve exactly the same height so the board never shifts
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(18.dp)
+                .padding(horizontal = 10.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            if (lastMoveText.isNotEmpty()) {
+                Text(
+                    text = lastMoveText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
                 )
             }
+        }
 
-            // ── In-game control bar ───────────────────────────────────────────
-            GameBottomBar(
-                onMenu           = { showMoveList = !showMoveList },
-                onEngineStrength = { showSettingsSheet = true },
-                onBack           = { vm.navigateBack() },
-                onForward        = { vm.navigateForward() },
-                onUndo           = { vm.undoOtbMove() },
-                onExportPgn      = {
-                    val pgn = vm.getCurrentGamePgn()
-                    vm.sharePgn(pgn)
-                },
-                canBack          = state.canGoBack,
-                canForward       = state.canGoForward,
-                isReviewMode     = isReviewMode,
+        // ── Chess board — fills all available width with minimal side margin ──
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                // Very small horizontal padding so the board is visible even in a
+                // small floating window, while still not touching screen edges.
+                .padding(horizontal = 2.dp)
+                .aspectRatio(1f),
+        ) {
+            ChessBoard(
+                modifier        = Modifier.fillMaxSize(),
+                state           = state,
+                onSquareTap     = { sq -> vm.onSquareTap(sq) },
+                showCoordinates = true,
             )
+        }
 
-            // ── Stockfish analysis strip + optional move list ─────────────────
-            // Wrapped in a scrollable column so it doesn't push the board off screen
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                StockfishPanel(
-                    eval            = eval,
-                    isThinking      = isThinking,
-                    engineEnabled   = engineEnabled,
-                    engineAvailable = engineAvailable,
-                    analysisLines   = analysisLines,
-                    moves           = state.moves,
-                    showMoveList    = showMoveList,
-                    moveGrade       = moveGrade,
-                    onToggleEngine  = { vm.toggleEngine() },
-                    modifier        = Modifier.fillMaxWidth(),
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-        }  // end outer Column
+        // ── In-game control bar ───────────────────────────────────────────
+        GameBottomBar(
+            onMenu           = { showMoveList = !showMoveList },
+            onEngineStrength = { showSettingsSheet = true },
+            onBack           = { vm.navigateBack() },
+            onForward        = { vm.navigateForward() },
+            onUndo           = { vm.undoOtbMove() },
+            onExportPgn      = {
+                val pgn = vm.getCurrentGamePgn()
+                vm.sharePgn(pgn)
+            },
+            canBack          = state.canGoBack,
+            canForward       = state.canGoForward,
+            isReviewMode     = isReviewMode,
+        )
+
+        // ── Stockfish analysis strip + optional move list ─────────────────
+        StockfishPanel(
+            eval            = eval,
+            isThinking      = isThinking,
+            engineEnabled   = engineEnabled,
+            engineAvailable = engineAvailable,
+            analysisLines   = analysisLines,
+            moves           = state.moves,
+            showMoveList    = showMoveList,
+            moveGrade       = moveGrade,
+            onToggleEngine  = { vm.toggleEngine() },
+            modifier        = Modifier.fillMaxWidth(),
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
+    }  // end outer Column
 
     // ── Pawn promotion picker ─────────────────────────────────────────────────
     if (promotionPending != null) {

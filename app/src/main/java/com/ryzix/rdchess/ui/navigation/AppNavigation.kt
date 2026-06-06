@@ -17,7 +17,11 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -61,6 +65,13 @@ fun MainPagerScreen(onThemeSettings: () -> Unit) {
     val scope      = rememberCoroutineScope()
     val vm: GameViewModel = viewModel()
 
+    // Fullscreen state — hides the bottom nav bar while on the Play page (index 1)
+    var isFullscreen by remember { mutableStateOf(false) }
+
+    // Reset fullscreen whenever the user navigates away from the Play page
+    val onPlayPage = pagerState.currentPage == 1
+    if (!onPlayPage && isFullscreen) isFullscreen = false
+
     val navBg     = Color(0xFF181818)
     val primary   = Color(0xFFFF2541)
     val muted     = Color(0xFF888888)
@@ -69,30 +80,33 @@ fun MainPagerScreen(onThemeSettings: () -> Unit) {
     Scaffold(
         containerColor = Color(0xFF0D0D0D),
         bottomBar = {
-            NavigationBar(
-                containerColor = navBg,
-                tonalElevation = 0.dp,
-            ) {
-                val items = listOf(
-                    Triple("Home",     Icons.Rounded.Home,      0),
-                    Triple("Play",     Icons.Rounded.PlayArrow, 1),
-                    Triple("History",  Icons.Rounded.History,   2),
-                    Triple("Settings", Icons.Rounded.Settings,  3),
-                )
-                items.forEach { (label, icon, idx) ->
-                    NavigationBarItem(
-                        selected = pagerState.currentPage == idx,
-                        onClick  = { scope.launch { pagerState.animateScrollToPage(idx) } },
-                        icon     = { Icon(icon, contentDescription = label) },
-                        label    = { Text(label) },
-                        colors   = NavigationBarItemDefaults.colors(
-                            selectedIconColor   = primary,
-                            selectedTextColor   = primary,
-                            indicatorColor      = indicator,
-                            unselectedIconColor = muted,
-                            unselectedTextColor = muted,
-                        ),
+            // Hide the bottom nav when fullscreen is active on the Play page
+            if (!(isFullscreen && onPlayPage)) {
+                NavigationBar(
+                    containerColor = navBg,
+                    tonalElevation = 0.dp,
+                ) {
+                    val items = listOf(
+                        Triple("Home",     Icons.Rounded.Home,      0),
+                        Triple("Play",     Icons.Rounded.PlayArrow, 1),
+                        Triple("History",  Icons.Rounded.History,   2),
+                        Triple("Settings", Icons.Rounded.Settings,  3),
                     )
+                    items.forEach { (label, icon, idx) ->
+                        NavigationBarItem(
+                            selected = pagerState.currentPage == idx,
+                            onClick  = { scope.launch { pagerState.animateScrollToPage(idx) } },
+                            icon     = { Icon(icon, contentDescription = label) },
+                            label    = { Text(label) },
+                            colors   = NavigationBarItemDefaults.colors(
+                                selectedIconColor   = primary,
+                                selectedTextColor   = primary,
+                                indicatorColor      = indicator,
+                                unselectedIconColor = muted,
+                                unselectedTextColor = muted,
+                            ),
+                        )
+                    }
                 }
             }
         },
@@ -113,6 +127,8 @@ fun MainPagerScreen(onThemeSettings: () -> Unit) {
                 1 -> GameScreen(
                     onBack = { scope.launch { pagerState.animateScrollToPage(0) } },
                     vm = vm,
+                    isFullscreen = isFullscreen,
+                    onToggleFullscreen = { isFullscreen = !isFullscreen },
                 )
                 2 -> GameHistoryScreen(
                     vm = vm,

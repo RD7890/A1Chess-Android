@@ -144,42 +144,48 @@ fun StockfishPanel(
         }
 
         // ── Analysis lines (only when expanded) ──────────────────────────
+        // Fixed height prevents layout shifts when lines appear/disappear or update.
         if (expanded && engineEnabled && engineAvailable) {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 tonalElevation = 2.dp,
             ) {
-                Column(
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 80.dp)
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                        .height(116.dp),           // fixed — board never shifts
                 ) {
-                    if (isThinking && analysisLines.isEmpty()) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(14.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
-                            )
-                            Text(
-                                text = "Engine thinking…",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                            )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (isThinking && analysisLines.isEmpty()) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                                )
+                                Text(
+                                    text = "Engine thinking…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                )
+                            }
                         }
-                    }
-                    analysisLines.forEach { line ->
-                        key(line.rank) {
-                            AnalysisLineRow(
-                                line = line,
-                                bestEval = analysisLines.firstOrNull()?.eval ?: line.eval,
-                                isThinking = isThinking,
-                            )
+                        analysisLines.forEach { line ->
+                            key(line.rank) {
+                                AnalysisLineRow(
+                                    line = line,
+                                    bestEval = analysisLines.firstOrNull()?.eval ?: line.eval,
+                                    isThinking = isThinking,
+                                )
+                            }
                         }
                     }
                 }

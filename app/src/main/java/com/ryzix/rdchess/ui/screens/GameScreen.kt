@@ -193,9 +193,10 @@ fun GameScreen(
     // ── New game dialog ───────────────────────────────────────────────────────
     if (showNewGameDialog) {
         NewGameDialog(
-            onStart = { playerIsWhite ->
+            onStart = { whiteAtBottom ->
                 showNewGameDialog = false
-                vm.newGame(otbMode = false, playerIsWhite = playerIsWhite)
+                // otbMode = true → both sides played by humans, Stockfish only shows arrows/hints
+                vm.newGame(otbMode = true, playerIsWhite = whiteAtBottom)
             },
             onDismiss = { showNewGameDialog = false },
         )
@@ -337,7 +338,7 @@ private fun GameOverDialog(
 
 @Composable
 private fun NewGameDialog(
-    onStart: (playerIsWhite: Boolean) -> Unit,
+    onStart: (whiteAtBottom: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -346,15 +347,20 @@ private fun NewGameDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(
-                    text = "Choose your color:",
+                    text = "Which side at bottom?",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
+                Text(
+                    text = "Stockfish will only show hints & arrows — both sides are played by you.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    // White
+                    // White at bottom
                     ColorPickerTile(
                         symbol = "♔",
                         label  = "White",
@@ -363,7 +369,7 @@ private fun NewGameDialog(
                         modifier = Modifier.weight(1f),
                         onClick  = { onStart(true) },
                     )
-                    // Random
+                    // Random orientation
                     ColorPickerTile(
                         symbol = "?",
                         label  = "Random",
@@ -372,7 +378,7 @@ private fun NewGameDialog(
                         modifier = Modifier.weight(1f),
                         onClick  = { onStart((0..1).random() == 0) },
                     )
-                    // Black
+                    // Black at bottom
                     ColorPickerTile(
                         symbol = "♚",
                         label  = "Black",

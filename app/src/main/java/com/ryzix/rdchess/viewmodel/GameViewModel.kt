@@ -431,10 +431,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _playerIsWhite.value = playerIsWhite
         chessGame.reset()
 
-        // Explicitly set the correct board orientation — don't toggle, because reset() preserves
-        // the previous isFlipped state via updateState().copy(), so toggling would be wrong
-        // when the player switches between White and Black across multiple games.
-        chessGame.setFlipped(!otbMode && !playerIsWhite)
+        // Board orientation: flip when Black is at bottom.
+        // In OTB mode playerIsWhite controls which side faces you (white=false → black at bottom).
+        // In vs-computer mode same logic applies.
+        chessGame.setFlipped(!playerIsWhite)
 
         // Clear persisted game
         viewModelScope.launch {

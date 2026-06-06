@@ -44,7 +44,7 @@ data class AppPrefs(
 enum class MoveGrade(val label: String, val symbol: String, val colorHex: Long, val iconFilename: String) {
     BRILLIANT("Brilliant", "!!", 0xFF00BCD4, "Brilliant.png"),
     BEST("Best Move", "!",  0xFF4CAF50, "Best.png"),
-    GOOD("Good",     "+",  0xFF8BC34A, "Great.png"),
+    GOOD("Good",     "+",  0xFF8BC34A, "Excellent.png"),
     INACCURACY("Inaccuracy", "?!", 0xFFFF9800, "Inaccuracy.png"),
     MISTAKE("Mistake", "?", 0xFFFF5722, "Mistake.png"),
     BLUNDER("Blunder", "??", 0xFFF44336, "Blunder.png"),

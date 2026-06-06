@@ -1,6 +1,8 @@
 package com.ryzix.rdchess.ui.screens.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -91,6 +93,52 @@ fun ChessBoard(
         } catch (e: Exception) { null }
     }
 
+    // ── Piece movement animation ───────────────────────────────────────────────
+    val pieceAnim = remember { Animatable(1f) }
+    var animFrom  by remember { mutableStateOf("") }
+    var animTo    by remember { mutableStateOf("") }
+    var animPiece by remember { mutableStateOf<Piece?>(null) }
+
+    // Track previous index + lastMove to detect forward vs backward navigation
+    var prevIndex     by remember { mutableIntStateOf(state.currentMoveIndex) }
+    var prevLastMove  by remember { mutableStateOf(state.lastMove) }
+
+    LaunchedEffect(state.currentMoveIndex) {
+        val newIndex  = state.currentMoveIndex
+        val oldIndex  = prevIndex
+        val oldMove   = prevLastMove   // captured before we update it below
+
+        when {
+            newIndex > oldIndex -> {
+                // Forward move: piece travels from→to
+                val move = state.lastMove
+                if (move != null) {
+                    animFrom  = move.first
+                    animTo    = move.second
+                    animPiece = parseFenPieces(state.fen)[move.second]
+                    pieceAnim.snapTo(0f)
+                    pieceAnim.animateTo(1f, tween(200, easing = FastOutSlowInEasing))
+                }
+            }
+            newIndex < oldIndex -> {
+                // Backward / undo: piece travels back to→from of the undone move
+                if (oldMove != null) {
+                    animFrom  = oldMove.second
+                    animTo    = oldMove.first
+                    animPiece = parseFenPieces(state.fen)[oldMove.first]
+                    pieceAnim.snapTo(0f)
+                    pieceAnim.animateTo(1f, tween(180, easing = FastOutSlowInEasing))
+                }
+            }
+        }
+
+        prevIndex    = newIndex
+        prevLastMove = state.lastMove
+    }
+
+    // Reading animProg in composable scope drives per-frame recomposition → redraws Canvas
+    val animProg = pieceAnim.value
+
     BoxWithConstraints(modifier = modifier) {
         val squareSizeDp = maxWidth / 8
 
@@ -108,6 +156,7 @@ fun ChessBoard(
             val squareSize = size.width / 8f
             val sqInt = squareSize.toInt()
 
+            // ── Board squares ──────────────────────────────────────────────────
             for (row in 0..7) {
                 for (col in 0..7) {
                     val isLight = (row + col) % 2 == 0
@@ -185,18 +234,34 @@ fun ChessBoard(
                 }
             }
 
+            // ── Pieces (skip animated piece at its destination) ────────────────
+            val isAnimating = animProg < 0.999f && animFrom.isNotEmpty() && animTo.isNotEmpty() && animPiece != null
             val piecesOnBoard = parseFenPieces(state.fen)
+
             piecesOnBoard.forEach { (sq, piece) ->
+                // While animating, skip the piece at its destination — we draw it interpolated below
+                if (isAnimating && sq == animTo && piece == animPiece) return@forEach
                 val (col, row) = squareToColRow(sq, state.isFlipped)
                 val bmp = getBitmap(piece, sqInt)
                 if (bmp != null) {
-                    drawImage(
-                        image = bmp,
-                        topLeft = Offset(col * squareSize, row * squareSize),
-                    )
+                    drawImage(image = bmp, topLeft = Offset(col * squareSize, row * squareSize))
                 }
             }
 
+            // ── Animated piece at interpolated position ────────────────────────
+            if (isAnimating && animPiece != null) {
+                val (fc, fr) = squareToColRow(animFrom, state.isFlipped)
+                val (tc, tr) = squareToColRow(animTo, state.isFlipped)
+                val t   = animProg
+                val ax  = (fc + t * (tc - fc)) * squareSize
+                val ay  = (fr + t * (tr - fr)) * squareSize
+                val bmp = getBitmap(animPiece!!, sqInt)
+                if (bmp != null) {
+                    drawImage(image = bmp, topLeft = Offset(ax, ay))
+                }
+            }
+
+            // ── Arrows (drawn on top of pieces) ───────────────────────────────
             state.arrows.forEach { arrow ->
                 drawArrow(arrow, squareSize, state.isFlipped)
             }
@@ -211,7 +276,6 @@ fun ChessBoard(
         if (toSquare != null && iconFile != null) {
             val (col, row) = squareToColRow(toSquare, state.isFlipped)
             val iconSize = squareSizeDp * 0.58f
-            // Top-right corner of the destination square, slightly overflowing
             val xOff = squareSizeDp * (col + 1) - iconSize * 0.42f
             val yOff = squareSizeDp * row - iconSize * 0.42f
 

@@ -10,20 +10,29 @@ import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
@@ -72,6 +81,25 @@ fun MainPagerScreen(onThemeSettings: () -> Unit) {
     val onPlayPage = pagerState.currentPage == 1
     if (!onPlayPage && isFullscreen) isFullscreen = false
 
+    // Mid-game save prompt — shown when user tries to leave the Play page with a game running
+    var showSavePrompt  by remember { mutableStateOf(false) }
+    var pendingPage     by remember { mutableIntStateOf(0) }
+
+    val gameState    by vm.gameState.collectAsState()
+    val isReviewMode by vm.isReviewMode.collectAsState()
+
+    /** Navigate to [target], but gate behind a save-prompt if a live game is running. */
+    fun navigateTo(target: Int) {
+        val leavingPlay = pagerState.currentPage == 1 && target != 1
+        val active = gameState.moves.isNotEmpty() && !gameState.isGameOver && !isReviewMode
+        if (leavingPlay && active) {
+            pendingPage = target
+            showSavePrompt = true
+        } else {
+            scope.launch { pagerState.animateScrollToPage(target) }
+        }
+    }
+
     val navBg     = Color(0xFF181818)
     val primary   = Color(0xFFFF2541)
     val muted     = Color(0xFF888888)
@@ -95,7 +123,7 @@ fun MainPagerScreen(onThemeSettings: () -> Unit) {
                     items.forEach { (label, icon, idx) ->
                         NavigationBarItem(
                             selected = pagerState.currentPage == idx,
-                            onClick  = { scope.launch { pagerState.animateScrollToPage(idx) } },
+                            onClick  = { navigateTo(idx) },
                             icon     = { Icon(icon, contentDescription = label) },
                             label    = { Text(label) },
                             colors   = NavigationBarItemDefaults.colors(
@@ -122,10 +150,10 @@ fun MainPagerScreen(onThemeSettings: () -> Unit) {
         ) { page ->
             when (page) {
                 0 -> HomeScreen(
-                    onPlayVsComputer = { scope.launch { pagerState.animateScrollToPage(1) } },
+                    onPlayVsComputer = { navigateTo(1) },
                 )
                 1 -> GameScreen(
-                    onBack = { scope.launch { pagerState.animateScrollToPage(0) } },
+                    onBack = { navigateTo(0) },
                     vm = vm,
                     isFullscreen = isFullscreen,
                     onToggleFullscreen = { isFullscreen = !isFullscreen },
@@ -136,15 +164,57 @@ fun MainPagerScreen(onThemeSettings: () -> Unit) {
                         vm.loadGameFromHistory(game)
                         scope.launch { pagerState.animateScrollToPage(1) }
                     },
+                    onGameContinued = { game ->
+                        vm.continueGameFromHistory(game)
+                        scope.launch { pagerState.animateScrollToPage(1) }
+                    },
                     onPgnLoaded = {
                         scope.launch { pagerState.animateScrollToPage(1) }
                     },
                 )
                 3 -> SettingsScreen(
-                    onBack = { scope.launch { pagerState.animateScrollToPage(0) } },
+                    onBack = { navigateTo(0) },
                     onThemeSettings = onThemeSettings,
                 )
             }
         }
+    }
+
+    // ── Mid-game save / discard prompt ────────────────────────────────────────
+    if (showSavePrompt) {
+        AlertDialog(
+            onDismissRequest = { showSavePrompt = false },
+            title = { Text("Save game?", fontWeight = FontWeight.Bold) },
+            text  = {
+                Text(
+                    "Do you want to save this game so you can continue or analyse it later?",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        vm.saveGameInProgress()
+                        showSavePrompt = false
+                        scope.launch { pagerState.animateScrollToPage(pendingPage) }
+                    },
+                ) {
+                    Text("Save & Leave")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = {
+                        showSavePrompt = false
+                        scope.launch { pagerState.animateScrollToPage(pendingPage) }
+                    },
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) {
+                    Text("Discard")
+                }
+            },
+        )
     }
 }

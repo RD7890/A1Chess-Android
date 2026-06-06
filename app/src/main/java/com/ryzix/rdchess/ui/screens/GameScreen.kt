@@ -1,5 +1,7 @@
 package com.ryzix.rdchess.ui.screens
 
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -15,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -45,6 +48,9 @@ fun GameScreen(
     var showMoveList      by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showNewGameDialog by remember { mutableStateOf(false) }
+    // Shown when a game ends; user can close it and manually review moves with ← →
+    var showGameOverDialog by remember { mutableStateOf(true) }
+    LaunchedEffect(state.isGameOver) { if (state.isGameOver) showGameOverDialog = true }
 
     // DO NOT call vm.newGame() here — game is restored from DataStore on ViewModel init,
     // and persists across tab switches since the ViewModel lives for the Activity lifetime.
@@ -171,22 +177,23 @@ fun GameScreen(
     }
 
     // ── Game-over overlay ─────────────────────────────────────────────────────
-    if (state.isGameOver && state.gameResult != null) {
+    if (state.isGameOver && state.gameResult != null && showGameOverDialog) {
         GameOverDialog(
             result    = state.gameResult!!,
             pgn       = vm.getCurrentGamePgn(),
             onExport  = { pgn -> vm.sharePgn(pgn) },
             onNewGame = { showNewGameDialog = true },
-            onBack    = onBack,
+            onAnalyse = { showGameOverDialog = false },
+            onClose   = onBack,
         )
     }
 
     // ── New game dialog ───────────────────────────────────────────────────────
     if (showNewGameDialog) {
         NewGameDialog(
-            onStart   = {
+            onStart = { playerIsWhite ->
                 showNewGameDialog = false
-                vm.newGame(otbMode = true)
+                vm.newGame(otbMode = false, playerIsWhite = playerIsWhite)
             },
             onDismiss = { showNewGameDialog = false },
         )
@@ -273,7 +280,8 @@ private fun GameOverDialog(
     pgn: String,
     onExport: (String) -> Unit,
     onNewGame: () -> Unit,
-    onBack: () -> Unit,
+    onAnalyse: () -> Unit,
+    onClose: () -> Unit,
 ) {
     val (title, subtitle) = when (result) {
         "1-0"     -> "White Wins!" to "Checkmate — well played!"
@@ -283,7 +291,7 @@ private fun GameOverDialog(
     }
 
     AlertDialog(
-        onDismissRequest = {},
+        onDismissRequest = onAnalyse,
         title = { Text(title, fontWeight = FontWeight.Bold) },
         text  = { Text(subtitle) },
         confirmButton = {
@@ -292,15 +300,33 @@ private fun GameOverDialog(
                     Text("New Game")
                 }
                 OutlinedButton(
+                    onClick = onAnalyse,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(
+                        Icons.Rounded.Analytics,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("Analyse Manually")
+                }
+                OutlinedButton(
                     onClick = { onExport(pgn) },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
+                    Icon(
+                        Icons.Rounded.Share,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
                     Text("Export PGN")
                 }
             }
         },
         dismissButton = {
-            TextButton(onClick = onBack) { Text("Back") }
+            TextButton(onClick = onClose) { Text("Close") }
         },
     )
 }
@@ -309,20 +335,90 @@ private fun GameOverDialog(
 
 @Composable
 private fun NewGameDialog(
-    onStart: () -> Unit,
+    onStart: (playerIsWhite: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("New Game?", fontWeight = FontWeight.Bold) },
-        text  = { Text("Start a fresh game? The current game will be lost.") },
-        confirmButton = {
-            Button(onClick = onStart) { Text("Start") }
+        title = { Text("New Game", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(
+                    text = "Choose your color:",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    // White
+                    ColorPickerTile(
+                        symbol = "♔",
+                        label  = "White",
+                        bg     = Color(0xFFF0D9B5),
+                        fg     = Color(0xFF1A1A1A),
+                        modifier = Modifier.weight(1f),
+                        onClick  = { onStart(true) },
+                    )
+                    // Random
+                    ColorPickerTile(
+                        symbol = "?",
+                        label  = "Random",
+                        bg     = MaterialTheme.colorScheme.surfaceVariant,
+                        fg     = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                        onClick  = { onStart((0..1).random() == 0) },
+                    )
+                    // Black
+                    ColorPickerTile(
+                        symbol = "♚",
+                        label  = "Black",
+                        bg     = Color(0xFF2C2C2C),
+                        fg     = Color(0xFFF0D9B5),
+                        modifier = Modifier.weight(1f),
+                        onClick  = { onStart(false) },
+                    )
+                }
+            }
         },
+        confirmButton = {},
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+}
+
+@Composable
+private fun ColorPickerTile(
+    symbol: String,
+    label: String,
+    bg: Color,
+    fg: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = bg,
+        modifier = modifier
+            .clickable(onClick = onClick)
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f), RoundedCornerShape(10.dp)),
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(text = symbol, fontSize = 26.sp, color = fg)
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = fg.copy(alpha = 0.85f),
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
 }
 
 // ── Engine settings sheet ─────────────────────────────────────────────────────
@@ -336,7 +432,7 @@ fun InlineEngineSettings(
     onMultiPvChange: (Int) -> Unit,
     onThreadsChange: (Int) -> Unit,
 ) {
-    val levelLabels = listOf("800","1200","1400","1600","1800","2000","2200","2400","2600","2700","2800","Max")
+    val levelLabels = listOf("800","1200","1400","1600","1800","2000","2200","2400","2600","2700","2800","3200")
 
     Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
         Text(

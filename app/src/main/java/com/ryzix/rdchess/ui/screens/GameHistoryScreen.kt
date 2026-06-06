@@ -27,6 +27,7 @@ import java.util.Locale
 fun GameHistoryScreen(
     vm: GameViewModel = viewModel(),
     onGameLoaded: (SavedGame) -> Unit = {},
+    onGameContinued: (SavedGame) -> Unit = {},
     onPgnLoaded: () -> Unit = {},
 ) {
     val history by vm.gameHistory.collectAsState()
@@ -54,7 +55,6 @@ fun GameHistoryScreen(
                     }
                 },
                 actions = {
-                    // Analyse PGN button
                     IconButton(onClick = { showPgnDialog = true; pgnInput = ""; pgnError = false }) {
                         Icon(
                             Icons.Rounded.Analytics,
@@ -134,6 +134,7 @@ fun GameHistoryScreen(
                         isExpanded = isExpanded,
                         onTap      = { expandedGameIdx = if (isExpanded) null else idx },
                         onReview   = { onGameLoaded(game) },
+                        onContinue = { onGameContinued(game) },
                         onExport   = { vm.sharePgn(game.generatePgn()) },
                     )
                 }
@@ -233,13 +234,17 @@ private fun GameHistoryCard(
     isExpanded: Boolean,
     onTap: () -> Unit,
     onReview: () -> Unit,
+    onContinue: () -> Unit,
     onExport: () -> Unit,
 ) {
+    val inProgress = game.result == "*"
+
     val (resultLabel, resultColor) = when (game.result) {
-        "1-0"     -> "White wins" to Color(0xFF4CAF50)
-        "0-1"     -> "Black wins" to Color(0xFFF44336)
-        "1/2-1/2" -> "Draw"       to Color(0xFFFF9800)
-        else      -> game.result  to MaterialTheme.colorScheme.onSurface
+        "1-0"     -> "White wins"   to Color(0xFF4CAF50)
+        "0-1"     -> "Black wins"   to Color(0xFFF44336)
+        "1/2-1/2" -> "Draw"         to Color(0xFFFF9800)
+        "*"       -> "In Progress"  to Color(0xFF2196F3)
+        else      -> game.result    to MaterialTheme.colorScheme.onSurface
     }
 
     val dateStr = remember(game.timestamp) {
@@ -269,7 +274,7 @@ private fun GameHistoryCard(
             ) {
                 Box(modifier = Modifier.size(38.dp), contentAlignment = Alignment.Center) {
                     Icon(
-                        Icons.Rounded.EmojiEvents,
+                        if (inProgress) Icons.Rounded.Pending else Icons.Rounded.EmojiEvents,
                         contentDescription = null,
                         tint = resultColor,
                         modifier = Modifier.size(28.dp),
@@ -320,29 +325,52 @@ private fun GameHistoryCard(
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    // Review game button
-                    Button(
-                        onClick = onReview,
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    ) {
-                        Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Review", style = MaterialTheme.typography.labelMedium)
-                    }
-
-                    // Export PGN button
-                    OutlinedButton(
-                        onClick = onExport,
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                    ) {
-                        Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Export PGN", style = MaterialTheme.typography.labelMedium)
+                    if (inProgress) {
+                        // In-progress: offer Continue (resume play) + Review (analysis only)
+                        Button(
+                            onClick = onContinue,
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF2196F3),
+                            ),
+                        ) {
+                            Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Continue", style = MaterialTheme.typography.labelMedium)
+                        }
+                        OutlinedButton(
+                            onClick = onReview,
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        ) {
+                            Icon(Icons.Rounded.Analytics, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Analyse", style = MaterialTheme.typography.labelMedium)
+                        }
+                    } else {
+                        // Completed game: Review + Export
+                        Button(
+                            onClick = onReview,
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        ) {
+                            Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Review", style = MaterialTheme.typography.labelMedium)
+                        }
+                        OutlinedButton(
+                            onClick = onExport,
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        ) {
+                            Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Export PGN", style = MaterialTheme.typography.labelMedium)
+                        }
                     }
                 }
             }

@@ -74,6 +74,13 @@ class StockfishEngine(private val context: Context) {
     @Volatile private var isSearchPending = false
 
     /**
+     * When true, the next "bestmove" line is the engine's response to a "stop" command
+     * issued to restart analysis — NOT a genuine completion. We suppress emitting stale
+     * lines and the bestmove event so the UI doesn't flash old suggestions.
+     */
+    @Volatile private var stoppingForRestart = false
+
+    /**
      * Locate the Stockfish binary.
      *
      * Android's package installer extracts every .so from jniLibs/arm64-v8a/
@@ -153,17 +160,28 @@ class StockfishEngine(private val context: Context) {
                         }
 
                         line.startsWith("bestmove") -> {
-                            val parts = line.split(" ")
-                            val move = if (parts.size >= 2) parts[1] else null
-                            if (lineBuffer.isNotEmpty()) {
+                            val wasRestart = stoppingForRestart
+                            stoppingForRestart = false
+
+                            if (!wasRestart && lineBuffer.isNotEmpty()) {
+                                // Genuine completion — flush final lines
                                 val sorted = lineBuffer.values.sortedBy { it.rank }
                                 _analysisFlow.emit(sorted)
-                                lineBuffer.clear()
-                                lastEmittedDepth = -1
                                 Log.d(TAG, "Final analysis flushed: ${sorted.size} lines")
+                            } else if (wasRestart) {
+                                // Stop-for-restart: discard stale lines — don't emit to UI
+                                Log.d(TAG, "Suppressed stale bestmove (stop-for-restart)")
                             }
-                            if (move != null && move != "(none)") {
-                                _bestMoveFlow.emit(move)
+
+                            lineBuffer.clear()
+                            lastEmittedDepth = -1
+
+                            if (!wasRestart) {
+                                val parts = line.split(" ")
+                                val move = if (parts.size >= 2) parts[1] else null
+                                if (move != null && move != "(none)") {
+                                    _bestMoveFlow.emit(move)
+                                }
                             }
                         }
 
@@ -215,6 +233,7 @@ class StockfishEngine(private val context: Context) {
         pendingFen = fen
         pendingSettings = settings
         isAnalysisPending = true
+        stoppingForRestart = true   // next bestmove is from stop, not completion
         sendCommand("stop")
         sendCommand("isready")
     }
@@ -225,6 +244,7 @@ class StockfishEngine(private val context: Context) {
         pendingSearchFen = fen
         pendingSearchSettings = settings
         isSearchPending = true
+        stoppingForRestart = true   // next bestmove is from stop, not completion
         sendCommand("stop")
         sendCommand("isready")
     }
@@ -234,6 +254,7 @@ class StockfishEngine(private val context: Context) {
         lastEmittedDepth = -1
         isAnalysisPending = false
         isSearchPending = false
+        stoppingForRestart = false
         pendingFen = null
         pendingSettings = null
         pendingSearchFen = null

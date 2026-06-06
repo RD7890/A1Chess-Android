@@ -133,6 +133,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val _isOtbMode = MutableStateFlow(true)
     val isOtbMode: StateFlow<Boolean> = _isOtbMode
 
+    /** Which color the human player is playing as (true = White, false = Black). */
+    private val _playerIsWhite = MutableStateFlow(true)
+    val playerIsWhite: StateFlow<Boolean> = _playerIsWhite
+
     private val _gameHistory = MutableStateFlow<List<SavedGame>>(emptyList())
     val gameHistory: StateFlow<List<SavedGame>> = _gameHistory
 
@@ -196,12 +200,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun collectEngineOutput() {
-        // bestmove — marks end of thinking; update arrows ONLY here (stable, definitive result)
+        // bestmove — genuine analysis completion (stop-for-restart bestmoves are suppressed in engine)
         viewModelScope.launch {
             engine.bestMoveFlow.collect { bestMove ->
                 _isEngineThinking.value = false
 
-                // Update arrows only on final bestmove — no mid-search flicker
+                // Update arrows on final bestmove
                 if (_engineEnabled.value && _prefs.value.showArrows && _analysisLines.value.isNotEmpty()) {
                     updateArrows(_analysisLines.value)
                 }
@@ -213,14 +217,21 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     gradeLastMove(postEval)
                 }
 
-                // vs-Computer mode: engine makes its reply
-                if (!_isOtbMode.value && !gameState.value.isGameOver && !gameState.value.isWhiteTurn) {
-                    val from  = bestMove.substring(0, 2)
-                    val to    = bestMove.substring(2, 4)
-                    val promo = if (bestMove.length >= 5) bestMove[4] else 'q'
-                    delay(300)
-                    chessGame.tryMove(from, to, promo)
-                    runAnalysis()
+                // vs-Computer mode: engine makes its reply after the human moves
+                if (!_isOtbMode.value && !gameState.value.isGameOver) {
+                    val isEngineTurn = if (_playerIsWhite.value)
+                        !gameState.value.isWhiteTurn   // engine plays Black
+                    else
+                        gameState.value.isWhiteTurn    // engine plays White
+
+                    if (isEngineTurn) {
+                        val from  = bestMove.substring(0, 2)
+                        val to    = bestMove.substring(2, 4)
+                        val promo = if (bestMove.length >= 5) bestMove[4] else 'q'
+                        delay(300)
+                        chessGame.tryMove(from, to, promo)
+                        runAnalysis()
+                    }
                 }
             }
         }
@@ -232,7 +243,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // analysis lines — update UI display only; arrows updated only on bestmove above
+        // analysis lines — update UI; arrows updated only on bestmove above
         viewModelScope.launch {
             engine.analysisFlow.collect { lines ->
                 _analysisLines.value = lines
@@ -278,13 +289,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         chessGame.setArrows(arrows)
     }
 
-    /** Run Stockfish analysis — deep search, minimum 3 s. */
+    /** Run Stockfish analysis — deep search, minimum 3 s for decisive arrows. */
     private fun runAnalysis() {
         if (!engineReady || !_engineEnabled.value) return
         val base = STOCKFISH_LEVELS.getOrElse(_prefs.value.levelIndex) { STOCKFISH_LEVELS[3] }
         val settings = base.copy(
             multiPv      = maxOf(3, _prefs.value.multiPv),
-            searchTimeMs = maxOf(3000, base.searchTimeMs), // minimum 3 s for decisive arrows
+            searchTimeMs = maxOf(3000, base.searchTimeMs),
         )
         engine.applySettings(settings)
         _isEngineThinking.value = true
@@ -298,8 +309,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun onSquareTap(square: String) {
         val state = gameState.value
         if (state.isGameOver) return
-        if (_isReviewMode.value) return  // no moves in review mode
-        if (!_isOtbMode.value && (!state.isWhiteTurn || _isEngineThinking.value)) return
+        if (_isReviewMode.value) return
+
+        // In vs-computer mode, only allow taps on the player's own turn
+        if (!_isOtbMode.value) {
+            val isPlayerTurn = if (_playerIsWhite.value) state.isWhiteTurn else !state.isWhiteTurn
+            if (!isPlayerTurn || _isEngineThinking.value) return
+        }
 
         val prevSelected = state.selectedSquare
 
@@ -321,9 +337,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     preMoveLines = _analysisLines.value
                     _lastMoveGrade.value = null
                     _analysisLines.value = emptyList()
+                    _engineEval.value = 0f
                     runAnalysis()
                     if (gameState.value.isGameOver) saveCurrentGame()
                 } else {
+                    _analysisLines.value = emptyList()
+                    _engineEval.value = 0f
                     triggerEngineMove()
                 }
                 return
@@ -347,9 +366,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 preMoveLines = _analysisLines.value
                 _lastMoveGrade.value = null
                 _analysisLines.value = emptyList()
+                _engineEval.value = 0f
                 runAnalysis()
                 if (gameState.value.isGameOver) saveCurrentGame()
             } else {
+                _analysisLines.value = emptyList()
+                _engineEval.value = 0f
                 triggerEngineMove()
             }
         }
@@ -381,7 +403,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Game control ───────────────────────────────────────────────────────────
 
-    fun newGame(otbMode: Boolean = true) {
+    /**
+     * Start a new game.
+     * @param otbMode  true = Over-the-Board (both sides human / analysis), false = vs computer
+     * @param playerIsWhite  which color the human plays (only relevant when otbMode = false)
+     */
+    fun newGame(otbMode: Boolean = true, playerIsWhite: Boolean = true) {
         engine.stop()
         _isEngineThinking.value = false
         _engineEval.value = 0f
@@ -391,7 +418,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _isReviewMode.value = false
         isGradingPending = false
         _isOtbMode.value = otbMode
+        _playerIsWhite.value = playerIsWhite
         chessGame.reset()
+
+        // Flip board perspective when playing as Black
+        if (!otbMode && !playerIsWhite) {
+            chessGame.flipBoard()
+        }
 
         // Clear persisted game
         viewModelScope.launch {
@@ -400,7 +433,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             delay(400)
-            if (otbMode) runAnalysis()
+            if (otbMode) {
+                runAnalysis()
+            } else if (!playerIsWhite) {
+                // Player is Black — engine plays White's first move
+                triggerEngineMove()
+            } else {
+                // Player is White — show analysis, wait for player
+                runAnalysis()
+            }
         }
     }
 
@@ -426,6 +467,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _isEngineThinking.value = false
         _lastMoveGrade.value = null
         chessGame.undoMove()
+        // In vs-computer mode, undo the engine's move too so player is back at their turn
+        if (!_isOtbMode.value) chessGame.undoMove()
         chessGame.clearArrows()
         persistCurrentGame()
         if (_engineEnabled.value) runAnalysis()
@@ -504,6 +547,77 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    // ── Active-game helpers ───────────────────────────────────────────────────
+
+    /** True when a live (non-review, non-over) game with at least one move is in progress. */
+    fun hasActiveGame(): Boolean =
+        gameState.value.moves.isNotEmpty() &&
+        !gameState.value.isGameOver &&
+        !_isReviewMode.value
+
+    /**
+     * Save the current in-progress game to history with result = "*".
+     * Replaces any previous "*" save so there is only ever one in-progress slot.
+     */
+    fun saveGameInProgress() {
+        val movesUci = chessGame.getMovesAsUci()
+        if (movesUci.isBlank()) return
+        val state = gameState.value
+        val game = SavedGame(
+            result    = "*",
+            moveCount = state.moves.size,
+            timestamp = System.currentTimeMillis(),
+            movesUci  = movesUci,
+        )
+        viewModelScope.launch {
+            val current = _gameHistory.value.toMutableList()
+            current.removeAll { it.result == "*" }   // keep only one in-progress slot
+            current.add(0, game)
+            val kept = current.take(50)
+            _gameHistory.value = kept
+            val encoded = kept.joinToString("\n") { g -> g.toRecord() }
+            getApplication<Application>().dataStore.edit { prefs ->
+                prefs[PrefKeys.GAME_HISTORY]       = encoded
+                prefs[PrefKeys.CURRENT_GAME_MOVES] = ""
+            }
+        }
+    }
+
+    /**
+     * Resume an in-progress game that was saved to history.
+     * Loads the moves, removes the "*" history entry, and lets the player continue.
+     */
+    fun continueGameFromHistory(game: SavedGame) {
+        engine.stop()
+        _isEngineThinking.value = false
+        _analysisLines.value = emptyList()
+        _lastMoveGrade.value = null
+        _promotionPending.value = null
+        _isReviewMode.value = false
+        _isOtbMode.value = false
+
+        if (game.movesUci.isNotBlank()) {
+            chessGame.loadFromMoves(game.movesUci)
+        } else {
+            chessGame.reset()
+        }
+
+        // Remove the in-progress entry from history — it's live again
+        viewModelScope.launch {
+            val current = _gameHistory.value.toMutableList()
+            val idx = current.indexOfFirst { it.timestamp == game.timestamp }
+            if (idx >= 0) current.removeAt(idx)
+            _gameHistory.value = current
+            val encoded = current.joinToString("\n") { g -> g.toRecord() }
+            getApplication<Application>().dataStore.edit { prefs ->
+                prefs[PrefKeys.GAME_HISTORY]       = encoded
+                prefs[PrefKeys.CURRENT_GAME_MOVES] = game.movesUci
+            }
+            delay(300)
+            if (_engineEnabled.value) runAnalysis()
+        }
+    }
+
     // ── Game history ───────────────────────────────────────────────────────────
 
     private fun saveCurrentGame() {
@@ -554,14 +668,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val settings = STOCKFISH_LEVELS.getOrElse(levelIndex) { STOCKFISH_LEVELS[3] }
         _prefs.value = _prefs.value.copy(
             levelIndex   = levelIndex,
-            searchTimeMs = maxOf(3000, settings.searchTimeMs),
+            searchTimeMs = settings.searchTimeMs,
             multiPv      = settings.multiPv,
             threads      = settings.threads,
         )
         viewModelScope.launch {
             getApplication<Application>().dataStore.edit { prefs ->
                 prefs[PrefKeys.LEVEL]       = levelIndex
-                prefs[PrefKeys.SEARCH_TIME] = maxOf(3000, settings.searchTimeMs)
+                prefs[PrefKeys.SEARCH_TIME] = settings.searchTimeMs
                 prefs[PrefKeys.MULTI_PV]    = settings.multiPv
                 prefs[PrefKeys.THREADS]     = settings.threads
             }
@@ -570,10 +684,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveSearchTime(ms: Int) {
-        val clamped = maxOf(3000, ms)
-        _prefs.value = _prefs.value.copy(searchTimeMs = clamped)
+        _prefs.value = _prefs.value.copy(searchTimeMs = ms)
         viewModelScope.launch {
-            getApplication<Application>().dataStore.edit { it[PrefKeys.SEARCH_TIME] = clamped }
+            getApplication<Application>().dataStore.edit { it[PrefKeys.SEARCH_TIME] = ms }
         }
     }
 

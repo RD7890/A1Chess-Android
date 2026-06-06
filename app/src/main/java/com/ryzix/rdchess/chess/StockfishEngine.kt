@@ -138,6 +138,10 @@ class StockfishEngine(private val context: Context) {
                                 pendingFen = null
                                 pendingSettings = null
                                 if (fen != null && settings != null) {
+                                    // By the time readyok arrives the stop-triggered bestmove has
+                                    // already been processed (or never came if engine was idle).
+                                    // Safe to clear here so the real bestmove is never suppressed.
+                                    stoppingForRestart = false
                                     sendCommand("ucinewgame")
                                     sendCommand("position fen $fen")
                                     sendCommand("go movetime ${settings.searchTimeMs}")
@@ -151,6 +155,8 @@ class StockfishEngine(private val context: Context) {
                                 pendingSearchFen = null
                                 pendingSearchSettings = null
                                 if (fen != null && settings != null) {
+                                    // Same reasoning as above — clear before the real search begins.
+                                    stoppingForRestart = false
                                     sendCommand("ucinewgame")
                                     sendCommand("position fen $fen")
                                     sendCommand("go movetime ${settings.searchTimeMs}")

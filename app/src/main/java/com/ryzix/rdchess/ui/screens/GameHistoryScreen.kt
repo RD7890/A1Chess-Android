@@ -274,7 +274,7 @@ private fun GameHistoryCard(
             ) {
                 Box(modifier = Modifier.size(38.dp), contentAlignment = Alignment.Center) {
                     Icon(
-                        if (inProgress) Icons.Rounded.Pending else Icons.Rounded.EmojiEvents,
+                        if (inProgress) Icons.Rounded.Schedule else Icons.Rounded.EmojiEvents,
                         contentDescription = null,
                         tint = resultColor,
                         modifier = Modifier.size(28.dp),

@@ -152,6 +152,7 @@ fun StockfishPanel(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(min = 80.dp)
                         .padding(horizontal = 14.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {

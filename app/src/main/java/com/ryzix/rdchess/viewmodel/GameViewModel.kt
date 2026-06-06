@@ -148,6 +148,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     @Volatile private var preMoveEval = 0f
     @Volatile private var preMoveLines: List<AnalysisLine> = emptyList()
 
+    /** True only while the engine is computing its reply move (triggerEngineMove was called).
+     *  Distinct from _isEngineThinking which also covers analysis. Used to block player taps
+     *  only when it is genuinely the engine's turn to move, not during post-move analysis. */
+    @Volatile private var engineMoveInFlight = false
+
     /** Prevents multiple newGame resets when first composing the Play screen. */
     private var gameInitialized = false
 
@@ -204,6 +209,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             engine.bestMoveFlow.collect { bestMove ->
                 _isEngineThinking.value = false
+                engineMoveInFlight = false   // always clear — move is done regardless of whose turn it was
 
                 // Update arrows on final bestmove
                 if (_engineEnabled.value && _prefs.value.showArrows && _analysisLines.value.isNotEmpty()) {
@@ -311,10 +317,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (state.isGameOver) return
         if (_isReviewMode.value) return
 
-        // In vs-computer mode, only allow taps on the player's own turn
+        // In vs-computer mode, only allow taps on the player's own turn.
+        // Block on engineMoveInFlight (not _isEngineThinking) so the player can still
+        // interact during post-move analysis without being locked out.
         if (!_isOtbMode.value) {
             val isPlayerTurn = if (_playerIsWhite.value) state.isWhiteTurn else !state.isWhiteTurn
-            if (!isPlayerTurn || _isEngineThinking.value) return
+            if (!isPlayerTurn || engineMoveInFlight) return
         }
 
         val prevSelected = state.selectedSquare
@@ -384,6 +392,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun triggerEngineMove() {
         if (!engineReady || gameState.value.isGameOver) return
         val settings = STOCKFISH_LEVELS.getOrElse(_prefs.value.levelIndex) { STOCKFISH_LEVELS[3] }
+        engineMoveInFlight = true
         _isEngineThinking.value = true
         engine.applySettings(settings)
         engine.startSearch(chessGame.getCurrentFen(), settings)
@@ -411,6 +420,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun newGame(otbMode: Boolean = true, playerIsWhite: Boolean = true) {
         engine.stop()
         _isEngineThinking.value = false
+        engineMoveInFlight = false
         _engineEval.value = 0f
         _analysisLines.value = emptyList()
         _lastMoveGrade.value = null
@@ -421,10 +431,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _playerIsWhite.value = playerIsWhite
         chessGame.reset()
 
-        // Flip board perspective when playing as Black
-        if (!otbMode && !playerIsWhite) {
-            chessGame.flipBoard()
-        }
+        // Explicitly set the correct board orientation — don't toggle, because reset() preserves
+        // the previous isFlipped state via updateState().copy(), so toggling would be wrong
+        // when the player switches between White and Black across multiple games.
+        chessGame.setFlipped(!otbMode && !playerIsWhite)
 
         // Clear persisted game
         viewModelScope.launch {

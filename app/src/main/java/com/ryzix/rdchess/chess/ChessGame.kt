@@ -221,6 +221,10 @@ class ChessGame {
         _state.value = _state.value.copy(isFlipped = !_state.value.isFlipped)
     }
 
+    fun setFlipped(flipped: Boolean) {
+        _state.value = _state.value.copy(isFlipped = flipped)
+    }
+
     fun setArrows(arrows: List<Arrow>) {
         _state.value = _state.value.copy(arrows = arrows)
     }

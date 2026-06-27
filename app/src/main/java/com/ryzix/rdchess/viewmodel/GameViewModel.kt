@@ -524,6 +524,35 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun continueGameFromHistory(game: SavedGame) {
+        engine.stop()
+        _isEngineThinking.value = false
+        _analysisLines.value = emptyList()
+        _lastMoveGrade.value = null
+        _promotionPending.value = null
+        _isReviewMode.value = false
+        _isOtbMode.value = true
+        gradeCache.clear()
+
+        if (game.movesUci.isNotBlank()) {
+            chessGame.loadFromMoves(game.movesUci)
+        } else {
+            chessGame.reset()
+        }
+
+        viewModelScope.launch {
+            delay(200)
+            if (_engineEnabled.value) runAnalysis()
+        }
+    }
+
+    fun clearHistory() {
+        viewModelScope.launch {
+            _gameHistory.value = emptyList()
+            getApplication<Application>().dataStore.edit { it[PrefKeys.GAME_HISTORY] = "" }
+        }
+    }
+
     fun loadGameFromPgn(pgn: String): Boolean {
         val ok = chessGame.loadFromPgn(pgn)
         if (ok) {

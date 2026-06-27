@@ -24,7 +24,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import com.caverock.androidsvg.SVG
 import com.github.bhlangonijr.chesslib.Piece
 import com.ryzix.rdchess.chess.Arrow
 import com.ryzix.rdchess.chess.ArrowColor
@@ -60,57 +59,46 @@ fun ChessBoard(
     showCoordinates: Boolean = true,
 ) {
     val context = LocalContext.current
-    val svgCache    = remember { mutableMapOf<String, SVG?>() }
     val bitmapCache = remember { mutableMapOf<String, ImageBitmap?>() }
     val iconCache   = remember { mutableMapOf<String, ImageBitmap?>() }
 
-    fun getSvg(assetName: String): SVG? = svgCache.getOrPut(assetName) {
-        try {
-            context.assets.open("pieces/staunty/$assetName.svg").use { SVG.getFromInputStream(it) }
-        } catch (e: Exception) { null }
-    }
-
-    fun getBitmap(piece: Piece, size: Int): ImageBitmap? {
+    fun getPieceBitmap(piece: Piece, size: Int): ImageBitmap? {
         val key = "${piece.name}_$size"
         return bitmapCache.getOrPut(key) {
             val assetName = pieceAssetName(piece) ?: return@getOrPut null
-            val svg = getSvg(assetName) ?: return@getOrPut null
-            svg.documentWidth  = size.toFloat()
-            svg.documentHeight = size.toFloat()
-            val bmp = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
-            val canvas = android.graphics.Canvas(bmp)
-            svg.renderToCanvas(canvas)
-            bmp.asImageBitmap()
+            try {
+                val raw = android.graphics.BitmapFactory.decodeStream(
+                    context.assets.open("pieces/$assetName.png")
+                ) ?: return@getOrPut null
+                android.graphics.Bitmap.createScaledBitmap(raw, size, size, true).asImageBitmap()
+            } catch (e: Exception) { null }
         }
     }
 
     fun getGradeIcon(filename: String): ImageBitmap? = iconCache.getOrPut(filename) {
         try {
             val bmp = android.graphics.BitmapFactory.decodeStream(
-                context.assets.open("move_icons/$filename")
+                context.assets.open("evaluation/$filename")
             )
             bmp?.asImageBitmap()
         } catch (e: Exception) { null }
     }
 
-    // ── Piece movement animation ───────────────────────────────────────────────
     val pieceAnim = remember { Animatable(1f) }
     var animFrom  by remember { mutableStateOf("") }
     var animTo    by remember { mutableStateOf("") }
     var animPiece by remember { mutableStateOf<Piece?>(null) }
 
-    // Track previous index + lastMove to detect forward vs backward navigation
     var prevIndex     by remember { mutableIntStateOf(state.currentMoveIndex) }
     var prevLastMove  by remember { mutableStateOf(state.lastMove) }
 
     LaunchedEffect(state.currentMoveIndex) {
         val newIndex  = state.currentMoveIndex
         val oldIndex  = prevIndex
-        val oldMove   = prevLastMove   // captured before we update it below
+        val oldMove   = prevLastMove
 
         when {
             newIndex > oldIndex -> {
-                // Forward move: piece travels from→to
                 val move = state.lastMove
                 if (move != null) {
                     animFrom  = move.first
@@ -121,7 +109,6 @@ fun ChessBoard(
                 }
             }
             newIndex < oldIndex -> {
-                // Backward / undo: piece travels back to→from of the undone move
                 if (oldMove != null) {
                     animFrom  = oldMove.second
                     animTo    = oldMove.first
@@ -136,7 +123,6 @@ fun ChessBoard(
         prevLastMove = state.lastMove
     }
 
-    // Reading animProg in composable scope drives per-frame recomposition → redraws Canvas
     val animProg = pieceAnim.value
 
     BoxWithConstraints(modifier = modifier) {
@@ -156,7 +142,6 @@ fun ChessBoard(
             val squareSize = size.width / 8f
             val sqInt = squareSize.toInt()
 
-            // ── Board squares ──────────────────────────────────────────────────
             for (row in 0..7) {
                 for (col in 0..7) {
                     val isLight = (row + col) % 2 == 0
@@ -234,40 +219,35 @@ fun ChessBoard(
                 }
             }
 
-            // ── Pieces (skip animated piece at its destination) ────────────────
             val isAnimating = animProg < 0.999f && animFrom.isNotEmpty() && animTo.isNotEmpty() && animPiece != null
             val piecesOnBoard = parseFenPieces(state.fen)
 
             piecesOnBoard.forEach { (sq, piece) ->
-                // While animating, skip the piece at its destination — we draw it interpolated below
                 if (isAnimating && sq == animTo && piece == animPiece) return@forEach
                 val (col, row) = squareToColRow(sq, state.isFlipped)
-                val bmp = getBitmap(piece, sqInt)
+                val bmp = getPieceBitmap(piece, sqInt)
                 if (bmp != null) {
                     drawImage(image = bmp, topLeft = Offset(col * squareSize, row * squareSize))
                 }
             }
 
-            // ── Animated piece at interpolated position ────────────────────────
             if (isAnimating && animPiece != null) {
                 val (fc, fr) = squareToColRow(animFrom, state.isFlipped)
                 val (tc, tr) = squareToColRow(animTo, state.isFlipped)
                 val t   = animProg
                 val ax  = (fc + t * (tc - fc)) * squareSize
                 val ay  = (fr + t * (tr - fr)) * squareSize
-                val bmp = getBitmap(animPiece!!, sqInt)
+                val bmp = getPieceBitmap(animPiece!!, sqInt)
                 if (bmp != null) {
                     drawImage(image = bmp, topLeft = Offset(ax, ay))
                 }
             }
 
-            // ── Arrows (drawn on top of pieces) ───────────────────────────────
             state.arrows.forEach { arrow ->
                 drawArrow(arrow, squareSize, state.isFlipped)
             }
         }
 
-        // ── Move grade icon overlay ────────────────────────────────────────────
         val toSquare = lastMoveGrade?.playedUci
             ?.takeIf { it.length >= 4 }
             ?.substring(2, 4)
@@ -357,18 +337,18 @@ private fun DrawScope.drawArrow(arrow: Arrow, squareSize: Float, flipped: Boolea
 }
 
 private fun pieceAssetName(piece: Piece): String? = when (piece) {
-    Piece.WHITE_KING   -> "wK"
-    Piece.WHITE_QUEEN  -> "wQ"
-    Piece.WHITE_ROOK   -> "wR"
-    Piece.WHITE_BISHOP -> "wB"
-    Piece.WHITE_KNIGHT -> "wN"
-    Piece.WHITE_PAWN   -> "wP"
-    Piece.BLACK_KING   -> "bK"
-    Piece.BLACK_QUEEN  -> "bQ"
-    Piece.BLACK_ROOK   -> "bR"
-    Piece.BLACK_BISHOP -> "bB"
-    Piece.BLACK_KNIGHT -> "bN"
-    Piece.BLACK_PAWN   -> "bP"
+    Piece.WHITE_KING   -> "wk"
+    Piece.WHITE_QUEEN  -> "wq"
+    Piece.WHITE_ROOK   -> "wr"
+    Piece.WHITE_BISHOP -> "wb"
+    Piece.WHITE_KNIGHT -> "wn"
+    Piece.WHITE_PAWN   -> "wp"
+    Piece.BLACK_KING   -> "bk"
+    Piece.BLACK_QUEEN  -> "bq"
+    Piece.BLACK_ROOK   -> "br"
+    Piece.BLACK_BISHOP -> "bb"
+    Piece.BLACK_KNIGHT -> "bn"
+    Piece.BLACK_PAWN   -> "bp"
     else -> null
 }
 
